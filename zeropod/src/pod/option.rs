@@ -134,3 +134,112 @@ impl<T: Copy + core::fmt::Debug> core::fmt::Debug for PodOption<T> {
         }
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    #[kani::proof]
+    fn some_roundtrip() {
+        let v: u8 = kani::any();
+        let pod = PodOption::some(v);
+        assert!(pod.is_some());
+        assert!(!pod.is_none());
+        assert!(pod.get() == Some(v), "some roundtrip must preserve value");
+    }
+
+    #[kani::proof]
+    fn none_roundtrip() {
+        let pod = PodOption::<u8>::none();
+        assert!(pod.is_none());
+        assert!(!pod.is_some());
+        assert!(pod.get() == None, "none must return None");
+    }
+
+    #[kani::proof]
+    fn set_some_then_get() {
+        let v: u8 = kani::any();
+        let mut pod = PodOption::<u8>::none();
+        pod.set(Some(v));
+        assert!(pod.get() == Some(v), "set(Some(v)) then get() must return Some(v)");
+    }
+
+    #[kani::proof]
+    fn set_none_then_get() {
+        let v: u8 = kani::any();
+        let mut pod = PodOption::some(v);
+        pod.set(None);
+        assert!(pod.get() == None, "set(None) then get() must return None");
+    }
+
+    #[kani::proof]
+    fn take_returns_value_and_clears() {
+        let v: u8 = kani::any();
+        let mut pod = PodOption::some(v);
+        let taken = pod.take();
+        assert!(taken == Some(v), "take must return the value");
+        assert!(pod.is_none(), "take must clear to None");
+    }
+
+    #[kani::proof]
+    fn replace_returns_old() {
+        let old: u8 = kani::any();
+        let new: u8 = kani::any();
+        let mut pod = PodOption::some(old);
+        let returned = pod.replace(new);
+        assert!(returned == Some(old), "replace must return old value");
+        assert!(pod.get() == Some(new), "replace must set new value");
+    }
+
+    #[kani::proof]
+    fn replace_on_none_returns_none() {
+        let v: u8 = kani::any();
+        let mut pod = PodOption::<u8>::none();
+        let returned = pod.replace(v);
+        assert!(returned == None, "replace on None must return None");
+        assert!(pod.get() == Some(v), "replace must set value");
+    }
+
+    #[kani::proof]
+    fn invalid_tag_is_none() {
+        let tag: u8 = kani::any();
+        kani::assume(tag != 0 && tag != 1);
+        let mut buf = [0u8; 2]; // PodOption<u8>: tag + value
+        buf[0] = tag;
+        buf[1] = kani::any();
+        let pod = unsafe { &*(buf.as_ptr() as *const PodOption<u8>) };
+        // Invalid tags must NOT be treated as Some.
+        assert!(!pod.is_some(), "invalid tag must not be Some");
+        assert!(pod.get() == None, "invalid tag must return None from get()");
+    }
+
+    #[kani::proof]
+    fn unwrap_or_some() {
+        let v: u8 = kani::any();
+        let default: u8 = kani::any();
+        let pod = PodOption::some(v);
+        assert!(pod.unwrap_or(default) == v, "unwrap_or on Some must return value");
+    }
+
+    #[kani::proof]
+    fn unwrap_or_none() {
+        let default: u8 = kani::any();
+        let pod = PodOption::<u8>::none();
+        assert!(pod.unwrap_or(default) == default, "unwrap_or on None must return default");
+    }
+
+    #[kani::proof]
+    fn default_is_none() {
+        let pod = PodOption::<u8>::default();
+        assert!(pod.is_none(), "default must be None");
+        assert!(pod.raw_tag() == 0, "default tag must be 0");
+    }
+
+    #[kani::proof]
+    fn clear_makes_none() {
+        let v: u8 = kani::any();
+        let mut pod = PodOption::some(v);
+        pod.clear();
+        assert!(pod.is_none(), "clear must make None");
+    }
+}
