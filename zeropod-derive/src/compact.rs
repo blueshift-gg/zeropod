@@ -496,30 +496,41 @@ fn generate_commit_body(
 
     let header_size = quote! { core::mem::size_of::<#header_name>() };
 
-    // Step 1: Snapshot old byte-lengths from header.
-    let mut snapshot_old = Vec::new();
+    // Step 1: compute per-field old_len / new_len snapshots.
+    let mut setup_lens = Vec::new();
     for f in tail_fields {
-        let len_name = format_ident!("__{}_len", f.name);
-        let old_len_name = format_ident!("__old_{}_bytelen", f.name);
+        let fname = &f.name;
+        let edit_name = format_ident!("__{}_edit", fname);
+        let len_name = format_ident!("__{}_len", fname);
+        let old_len_var = format_ident!("__old_len_{}", fname);
+        let new_len_var = format_ident!("__new_len_{}", fname);
         let pfx = tail_pfx(&f.kind);
         let read_len = read_len_expr(&len_name, pfx);
 
         match &f.kind {
             FieldKind::Tail(TailField::String { .. }) => {
-                snapshot_old.push(quote! {
-                    let #old_len_name = {
+                setup_lens.push(quote! {
+                    let #old_len_var: usize = {
                         let __hdr = self.header();
                         #read_len
+                    };
+                    let #new_len_var: usize = match self.#edit_name {
+                        Some((_, __bl)) => __bl,
+                        None => #old_len_var,
                     };
                 });
             }
             FieldKind::Tail(TailField::Vec { elem, .. }) => {
                 let mapped_elem = map_to_pod_type(elem);
-                snapshot_old.push(quote! {
-                    let #old_len_name = {
+                setup_lens.push(quote! {
+                    let #old_len_var: usize = {
                         let __hdr = self.header();
                         let __count = #read_len;
                         __count * core::mem::size_of::<#mapped_elem>()
+                    };
+                    let #new_len_var: usize = match self.#edit_name {
+                        Some((_, __count, __sz)) => __count * __sz,
+                        None => #old_len_var,
                     };
                 });
             }
@@ -527,71 +538,127 @@ fn generate_commit_body(
         }
     }
 
-    // Step 2-4: Process each tail field — write new or memmove old.
-    let mut process_fields = Vec::new();
-    for f in tail_fields {
-        let edit_name = format_ident!("__{}_edit", f.name);
-        let old_len_name = format_ident!("__old_{}_bytelen", f.name);
+    // Step 2: compute per-field old_offset / new_offset from cumulative lengths.
+    let mut setup_offsets = Vec::new();
+    for (i, f) in tail_fields.iter().enumerate() {
+        let fname = &f.name;
+        let old_off_var = format_ident!("__old_off_{}", fname);
+        let new_off_var = format_ident!("__new_off_{}", fname);
+        if i == 0 {
+            setup_offsets.push(quote! {
+                let #old_off_var: usize = #header_size;
+                let #new_off_var: usize = #header_size;
+            });
+        } else {
+            let prev_f = &tail_fields[i - 1];
+            let prev_old_off = format_ident!("__old_off_{}", prev_f.name);
+            let prev_new_off = format_ident!("__new_off_{}", prev_f.name);
+            let prev_old_len = format_ident!("__old_len_{}", prev_f.name);
+            let prev_new_len = format_ident!("__new_len_{}", prev_f.name);
+            setup_offsets.push(quote! {
+                let #old_off_var: usize = #prev_old_off + #prev_old_len;
+                let #new_off_var: usize = #prev_new_off + #prev_new_len;
+            });
+        }
+    }
 
+    let last_f = tail_fields.last().unwrap();
+    let last_new_off = format_ident!("__new_off_{}", last_f.name);
+    let last_new_len = format_ident!("__new_len_{}", last_f.name);
+
+    // Phase 1a: unedited fields that shift backward, in forward iteration order.
+    // Phase 1b: unedited fields that shift forward, in reverse iteration order.
+    // This two-pass ordering ensures source bytes are never read after being
+    // overwritten by an earlier step, regardless of mixed grow/shrink edits.
+    let mut phase_1a = Vec::new();
+    for f in tail_fields.iter() {
+        let fname = &f.name;
+        let edit_name = format_ident!("__{}_edit", fname);
+        let old_off_var = format_ident!("__old_off_{}", fname);
+        let new_off_var = format_ident!("__new_off_{}", fname);
+        let old_len_var = format_ident!("__old_len_{}", fname);
+        phase_1a.push(quote! {
+            if self.#edit_name.is_none()
+                && #new_off_var < #old_off_var
+                && #old_len_var > 0
+            {
+                unsafe {
+                    core::ptr::copy(
+                        __buf_ptr.add(#old_off_var) as *const u8,
+                        __buf_ptr.add(#new_off_var),
+                        #old_len_var,
+                    );
+                }
+            }
+        });
+    }
+
+    let mut phase_1b = Vec::new();
+    for f in tail_fields.iter().rev() {
+        let fname = &f.name;
+        let edit_name = format_ident!("__{}_edit", fname);
+        let old_off_var = format_ident!("__old_off_{}", fname);
+        let new_off_var = format_ident!("__new_off_{}", fname);
+        let old_len_var = format_ident!("__old_len_{}", fname);
+        phase_1b.push(quote! {
+            if self.#edit_name.is_none()
+                && #new_off_var > #old_off_var
+                && #old_len_var > 0
+            {
+                unsafe {
+                    core::ptr::copy(
+                        __buf_ptr.add(#old_off_var) as *const u8,
+                        __buf_ptr.add(#new_off_var),
+                        #old_len_var,
+                    );
+                }
+            }
+        });
+    }
+
+    // Phase 2: write edited fields to their final positions.
+    let mut phase_2 = Vec::new();
+    for f in tail_fields {
+        let fname = &f.name;
+        let edit_name = format_ident!("__{}_edit", fname);
+        let new_off_var = format_ident!("__new_off_{}", fname);
         match &f.kind {
             FieldKind::Tail(TailField::String { .. }) => {
-                process_fields.push(quote! {
+                phase_2.push(quote! {
                     if let Some((__src_ptr, __new_byte_len)) = self.#edit_name {
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(
-                                __src_ptr,
-                                __buf_ptr.add(__new_offset),
-                                __new_byte_len,
-                            );
-                        }
-                        __new_offset += __new_byte_len;
-                    } else {
-                        if __old_offset != __new_offset && #old_len_name > 0 {
+                        if __new_byte_len > 0 {
                             unsafe {
-                                core::ptr::copy(
-                                    __buf_ptr.add(__old_offset) as *const u8,
-                                    __buf_ptr.add(__new_offset),
-                                    #old_len_name,
+                                core::ptr::copy_nonoverlapping(
+                                    __src_ptr,
+                                    __buf_ptr.add(#new_off_var),
+                                    __new_byte_len,
                                 );
                             }
                         }
-                        __new_offset += #old_len_name;
                     }
-                    __old_offset += #old_len_name;
                 });
             }
             FieldKind::Tail(TailField::Vec { .. }) => {
-                process_fields.push(quote! {
+                phase_2.push(quote! {
                     if let Some((__src_ptr, __count, __elem_size)) = self.#edit_name {
                         let __new_byte_len = __count * __elem_size;
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(
-                                __src_ptr,
-                                __buf_ptr.add(__new_offset),
-                                __new_byte_len,
-                            );
-                        }
-                        __new_offset += __new_byte_len;
-                    } else {
-                        if __old_offset != __new_offset && #old_len_name > 0 {
+                        if __new_byte_len > 0 {
                             unsafe {
-                                core::ptr::copy(
-                                    __buf_ptr.add(__old_offset) as *const u8,
-                                    __buf_ptr.add(__new_offset),
-                                    #old_len_name,
+                                core::ptr::copy_nonoverlapping(
+                                    __src_ptr,
+                                    __buf_ptr.add(#new_off_var),
+                                    __new_byte_len,
                                 );
                             }
                         }
-                        __new_offset += #old_len_name;
                     }
-                    __old_offset += #old_len_name;
                 });
             }
             _ => unreachable!(),
         }
     }
 
-    // Step 5: Update header length fields for edited fields.
+    // Update header length prefixes for edited fields.
     let mut update_lens = Vec::new();
     for f in tail_fields {
         let edit_name = format_ident!("__{}_edit", f.name);
@@ -619,7 +686,6 @@ fn generate_commit_body(
         }
     }
 
-    // Step 6: Clear edit descriptors.
     let clear_edits: Vec<_> = tail_fields
         .iter()
         .map(|f| {
@@ -630,32 +696,37 @@ fn generate_commit_body(
 
     quote! {
         pub fn commit(&mut self) -> Result<usize, zeropod::ZeroPodError> {
-            // Guard: ensure buffer can hold the projected size.
-            let __required = self.projected_size();
-            if __required > self.data.len() {
+            #( #setup_lens )*
+            #( #setup_offsets )*
+
+            let __final_total: usize = #last_new_off + #last_new_len;
+            if __final_total > self.data.len() {
                 return Err(zeropod::ZeroPodError::BufferTooSmall);
             }
 
-            // Snapshot old byte-lengths before any writes.
-            #( #snapshot_old )*
-
-            // Obtain a single mutable pointer for all buffer operations.
             let __buf_ptr = self.data.as_mut_ptr();
 
-            // Process tail fields: write new data or memmove old data.
-            let mut __new_offset = #header_size;
-            let mut __old_offset = #header_size;
+            // Move unedited fields that shift to a lower offset. Forward
+            // iteration is safe here because writing to a lower address never
+            // clobbers the source bytes of a later unedited field.
+            #( #phase_1a )*
 
-            #( #process_fields )*
+            // Move unedited fields that shift to a higher offset. Reverse
+            // iteration is required so earlier fields still read untouched
+            // source bytes even after later fields have been moved forward.
+            #( #phase_1b )*
 
-            // Update header length prefixes for edited fields.
+            // All unedited tail bytes are now at their final positions, so we
+            // can safely copy caller-provided data into the edited slots
+            // without risking aliasing with remaining unedited data.
+            #( #phase_2 )*
+
             #( #update_lens )*
 
-            // Finalize.
-            self.total_len = __new_offset;
+            self.total_len = __final_total;
             #( #clear_edits )*
 
-            Ok(__new_offset)
+            Ok(__final_total)
         }
     }
 }
