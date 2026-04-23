@@ -1238,6 +1238,16 @@ mod kani_proofs {
     // All use `#[kani::solver(z3)]` because `mul_overflow_panics` needs z3
     // to avoid CaDiCaL timeouts at 64+ bit widths, and applying it
     // uniformly keeps the macro simple.
+    //
+    // Landmine for future maintainers: `#[kani::should_panic]` passes if
+    // *at least one* reachable path panics — not if *every* path panics.
+    // The harnesses below are structured so that the constrained input
+    // space (via literal divisors, `kani::assume` of overflow, or concrete
+    // MIN/-1) contains only panicking paths, making the implications "all
+    // constrained inputs panic" and "some constrained input panics"
+    // coincide. If you later relax a `kani::assume` or broaden the input
+    // space, the harness can silently lose rigor while still passing.
+    // Keep the constraint tight to the specific panic condition under test.
 
     macro_rules! kani_should_panic_common {
         ($pod:ident, $native:ty, $mod_name:ident) => {
@@ -1356,20 +1366,60 @@ mod kani_proofs {
 
                 // i{N}::MIN / -1 overflows in two's complement — the sole
                 // representable negation would be MAX + 1. Panics in every
-                // build mode, not just debug.
+                // build mode, not just debug. Cover all three operand
+                // directions since Kani verifies each monomorphized impl
+                // separately.
 
                 #[kani::proof]
                 #[kani::should_panic]
                 #[kani::solver(z3)]
-                fn div_min_by_neg_one_panics() {
+                fn div_min_pod_by_pod_neg_one_panics() {
                     let _ = $pod::from(<$native>::MIN) / $pod::from(-1 as $native);
                 }
 
                 #[kani::proof]
                 #[kani::should_panic]
                 #[kani::solver(z3)]
-                fn rem_min_by_neg_one_panics() {
+                fn div_min_pod_by_native_neg_one_panics() {
+                    let _ = $pod::from(<$native>::MIN) / (-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_native_min_by_pod_neg_one_panics() {
+                    let _ = <$native>::MIN / $pod::from(-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_min_pod_by_pod_neg_one_panics() {
                     let _ = $pod::from(<$native>::MIN) % $pod::from(-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_min_pod_by_native_neg_one_panics() {
+                    let _ = $pod::from(<$native>::MIN) % (-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_native_min_by_pod_neg_one_panics() {
+                    let _ = <$native>::MIN % $pod::from(-1 as $native);
+                }
+
+                // -i{N}::MIN overflows (the positive of MIN is MAX + 1).
+                // Panics only with debug_assertions; wraps on release.
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn neg_min_panics() {
+                    let _ = -$pod::from(<$native>::MIN);
                 }
             }
         };
