@@ -121,10 +121,35 @@ impl<T: Copy + ZcValidate> ZcValidate for PodOption<T> {
 
 /// # Safety
 ///
-/// Implementors must guarantee:
-/// - `core::mem::align_of::<Self>() == 1`
-/// - The type is safe to view from packed, unaligned bytes via pointer cast
-/// - `ZcValidate::validate_ref` correctly rejects all invalid bit patterns
+/// Implementors MUST guarantee all four of the following. Any violation
+/// makes the zero-copy pointer cast `&*(ptr as *const Self)` performed by
+/// the deserialization path undefined behavior.
+///
+/// 1. **Alignment == 1.** `core::mem::align_of::<Self>() == 1`, so casts
+///    from `*const u8` are well-defined at any byte offset.
+///
+/// 2. **No padding.** `Self` contains no padding bytes. Use
+///    `#[repr(transparent)]` over a single wrapped type, or `#[repr(C)]` /
+///    `#[repr(packed)]` composed only of `ZcElem` fields.
+///
+/// 3. **Validity invariant holds for every bit pattern.** It must be sound
+///    to form `&Self` from any `size_of::<Self>()` bytes of *initialized*
+///    memory, *before* `validate_ref` has been consulted. Forming an
+///    invalid reference is UB under Rust's aliasing rules regardless of
+///    whether the bytes are ever read. This rules out types whose validity
+///    is bit-pattern-restricted at the Rust type level — e.g., bare `bool`,
+///    `char`, `NonZero*`, or enums with fewer than `2^N` discriminants.
+///    Wrappers that store `u8` / `[u8; N]` and only *interpret* bytes at
+///    access time (like `PodBool`) are fine; a field of type `bool` is not.
+///
+/// 4. **`ZcValidate::validate_ref` is load-bearing.** It must reject every
+///    bit pattern whose reading through a safe accessor could cause UB or
+///    violate the type's documented invariants. For types where every
+///    initialized bit pattern is a semantically valid value (Pod integers,
+///    `[u8; N]`), `validate_ref` may trivially return `Ok(())`. For types
+///    with a restricted domain (`PodBool`, enums with fewer than `2^N`
+///    discriminants, length-prefix-bearing containers), `validate_ref` is
+///    the sole gate and MUST NOT short-circuit.
 pub unsafe trait ZcElem: Copy + ZcValidate {}
 
 // SAFETY: u8 and i8 are single bytes, trivially align 1, all bit patterns
