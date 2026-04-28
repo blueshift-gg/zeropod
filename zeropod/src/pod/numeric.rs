@@ -1209,4 +1209,233 @@ mod kani_proofs {
     kani_checked_sat_div_proofs!(PodU32, u32, checked_u32);
     kani_checked_sat_div_proofs!(PodU64, u64, checked_u64);
     kani_checked_sat_div_proofs!(PodU128, u128, checked_u128);
+
+    // ---------------------------------------------------------------------
+    // Should-panic harnesses
+    // ---------------------------------------------------------------------
+    //
+    // The proofs above show that operators produce the expected result when
+    // preconditions hold (no overflow, non-zero divisor, in-range shift).
+    // The harnesses below are the converse: they confirm that when
+    // preconditions are violated, the operators *panic* rather than wrapping
+    // silently or returning junk.
+    //
+    // Two groups of panics:
+    //
+    //   Group A — panic in both debug and release (reachable on-chain):
+    //     * div / rem by zero (Pod/Pod, Pod/native, native/Pod)
+    //     * signed div/rem overflow: i{N}::MIN / -1 and i{N}::MIN % -1
+    //
+    //   Group B — panic only with `debug_assertions` (wrap on release;
+    //   NOT reachable on-chain, but load-bearing for off-chain / debug /
+    //   test code):
+    //     * add / sub / mul overflow
+    //     * shift amount >= bit-width
+    //
+    // Kani compiles with `debug_assertions` on, so it observes the Group B
+    // panic branch. In release builds the same operators silently wrap.
+    //
+    // All use `#[kani::solver(z3)]` because `mul_overflow_panics` needs z3
+    // to avoid CaDiCaL timeouts at 64+ bit widths, and applying it
+    // uniformly keeps the macro simple.
+    //
+    // Landmine for future maintainers: `#[kani::should_panic]` passes if
+    // *at least one* reachable path panics — not if *every* path panics.
+    // The harnesses below are structured so that the constrained input
+    // space (via literal divisors, `kani::assume` of overflow, or concrete
+    // MIN/-1) contains only panicking paths, making the implications "all
+    // constrained inputs panic" and "some constrained input panics"
+    // coincide. If you later relax a `kani::assume` or broaden the input
+    // space, the harness can silently lose rigor while still passing.
+    // Keep the constraint tight to the specific panic condition under test.
+
+    macro_rules! kani_should_panic_common {
+        ($pod:ident, $native:ty, $mod_name:ident) => {
+            mod $mod_name {
+                use super::super::*;
+
+                // --- Group A: div / rem by zero ---
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_pod_by_pod_zero_panics() {
+                    let a: $native = kani::any();
+                    let _ = $pod::from(a) / $pod::from(0);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_pod_by_native_zero_panics() {
+                    let a: $native = kani::any();
+                    let _ = $pod::from(a) / (0 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_native_by_pod_zero_panics() {
+                    let a: $native = kani::any();
+                    let _ = a / $pod::from(0);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_pod_by_pod_zero_panics() {
+                    let a: $native = kani::any();
+                    let _ = $pod::from(a) % $pod::from(0);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_pod_by_native_zero_panics() {
+                    let a: $native = kani::any();
+                    let _ = $pod::from(a) % (0 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_native_by_pod_zero_panics() {
+                    let a: $native = kani::any();
+                    let _ = a % $pod::from(0);
+                }
+
+                // --- Group B: debug-mode overflow panics ---
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn add_overflow_panics() {
+                    let a: $native = kani::any();
+                    let b: $native = kani::any();
+                    kani::assume(a.checked_add(b).is_none());
+                    let _ = $pod::from(a) + $pod::from(b);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn sub_overflow_panics() {
+                    let a: $native = kani::any();
+                    let b: $native = kani::any();
+                    kani::assume(a.checked_sub(b).is_none());
+                    let _ = $pod::from(a) - $pod::from(b);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn mul_overflow_panics() {
+                    let a: $native = kani::any();
+                    let b: $native = kani::any();
+                    kani::assume(a.checked_mul(b).is_none());
+                    let _ = $pod::from(a) * $pod::from(b);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn shl_overflow_panics() {
+                    let a: $native = kani::any();
+                    let shift: u32 = kani::any();
+                    kani::assume(shift >= <$native>::BITS);
+                    let _ = $pod::from(a) << shift;
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn shr_overflow_panics() {
+                    let a: $native = kani::any();
+                    let shift: u32 = kani::any();
+                    kani::assume(shift >= <$native>::BITS);
+                    let _ = $pod::from(a) >> shift;
+                }
+            }
+        };
+    }
+
+    macro_rules! kani_should_panic_signed {
+        ($pod:ident, $native:ty, $mod_name:ident) => {
+            mod $mod_name {
+                use super::super::*;
+
+                // i{N}::MIN / -1 overflows in two's complement — the sole
+                // representable negation would be MAX + 1. Panics in every
+                // build mode, not just debug. Cover all three operand
+                // directions since Kani verifies each monomorphized impl
+                // separately.
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_min_pod_by_pod_neg_one_panics() {
+                    let _ = $pod::from(<$native>::MIN) / $pod::from(-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_min_pod_by_native_neg_one_panics() {
+                    let _ = $pod::from(<$native>::MIN) / (-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn div_native_min_by_pod_neg_one_panics() {
+                    let _ = <$native>::MIN / $pod::from(-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_min_pod_by_pod_neg_one_panics() {
+                    let _ = $pod::from(<$native>::MIN) % $pod::from(-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_min_pod_by_native_neg_one_panics() {
+                    let _ = $pod::from(<$native>::MIN) % (-1 as $native);
+                }
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn rem_native_min_by_pod_neg_one_panics() {
+                    let _ = <$native>::MIN % $pod::from(-1 as $native);
+                }
+
+                // -i{N}::MIN overflows (the positive of MIN is MAX + 1).
+                // Panics only with debug_assertions; wraps on release.
+
+                #[kani::proof]
+                #[kani::should_panic]
+                #[kani::solver(z3)]
+                fn neg_min_panics() {
+                    let _ = -$pod::from(<$native>::MIN);
+                }
+            }
+        };
+    }
+
+    kani_should_panic_common!(PodU16, u16, should_panic_u16);
+    kani_should_panic_common!(PodU32, u32, should_panic_u32);
+    kani_should_panic_common!(PodU64, u64, should_panic_u64);
+    kani_should_panic_common!(PodU128, u128, should_panic_u128);
+    kani_should_panic_common!(PodI16, i16, should_panic_i16);
+    kani_should_panic_common!(PodI32, i32, should_panic_i32);
+    kani_should_panic_common!(PodI64, i64, should_panic_i64);
+    kani_should_panic_common!(PodI128, i128, should_panic_i128);
+
+    kani_should_panic_signed!(PodI16, i16, should_panic_signed_i16);
+    kani_should_panic_signed!(PodI32, i32, should_panic_signed_i32);
+    kani_should_panic_signed!(PodI64, i64, should_panic_signed_i64);
+    kani_should_panic_signed!(PodI128, i128, should_panic_signed_i128);
 }
