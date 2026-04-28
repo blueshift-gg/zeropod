@@ -161,7 +161,10 @@ mod kani_proofs {
         let v: u8 = kani::any();
         let mut pod = PodOption::<u8>::none();
         pod.set(Some(v));
-        assert!(pod.get() == Some(v), "set(Some(v)) then get() must return Some(v)");
+        assert!(
+            pod.get() == Some(v),
+            "set(Some(v)) then get() must return Some(v)"
+        );
     }
 
     #[kani::proof]
@@ -218,14 +221,20 @@ mod kani_proofs {
         let v: u8 = kani::any();
         let default: u8 = kani::any();
         let pod = PodOption::some(v);
-        assert!(pod.unwrap_or(default) == v, "unwrap_or on Some must return value");
+        assert!(
+            pod.unwrap_or(default) == v,
+            "unwrap_or on Some must return value"
+        );
     }
 
     #[kani::proof]
     fn unwrap_or_none() {
         let default: u8 = kani::any();
         let pod = PodOption::<u8>::none();
-        assert!(pod.unwrap_or(default) == default, "unwrap_or on None must return default");
+        assert!(
+            pod.unwrap_or(default) == default,
+            "unwrap_or on None must return default"
+        );
     }
 
     #[kani::proof]

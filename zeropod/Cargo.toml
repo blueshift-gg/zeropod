@@ -11,6 +11,9 @@ wincode = ["dep:wincode"]
 solana-address = ["dep:solana-address"]
 solana-program-error = ["dep:solana-program-error"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [dependencies]
 zeropod-derive = { version = "=0.1.0", path = "../zeropod-derive" }
 wincode = { version = "0.4.7", features = ["derive"], optional = true }
