@@ -3,7 +3,7 @@
 //! the new value clobbered the source bytes of later unedited tail fields
 //! before they were relocated.
 
-use zeropod::ZeroPod;
+use zeropod::{ZeroPod, ZeroPodError};
 
 #[allow(dead_code)]
 #[derive(ZeroPod)]
@@ -14,6 +14,46 @@ struct Profile {
     pub active: bool,
     pub bio: zeropod::String<64>,
     pub tags: zeropod::Vec<[u8; 32], 20>,
+}
+
+#[test]
+fn compact_mut_oversized_grow_returns_buffer_too_small_without_mutating() {
+    let mut buf = vec![0u8; 300];
+    let tag = [0xDDu8; 32];
+
+    let committed_size = {
+        let mut profile = ProfileMut::new(&mut buf).unwrap();
+        profile.set_bio("hi").unwrap();
+        let tags = [tag];
+        profile.set_tags(&tags).unwrap();
+        profile.commit().unwrap()
+    };
+
+    buf.truncate(committed_size);
+    let snapshot = buf.clone();
+
+    {
+        // `String<64>` caps UTF-8 length at 64; stay within that while still
+        // requiring more total bytes than the minimally-sized account slice.
+        let long_bio = "y".repeat(48);
+        let mut profile = ProfileMut::new(&mut buf).unwrap();
+        profile.set_bio(&long_bio).unwrap();
+        assert_eq!(
+            profile.commit(),
+            Err(ZeroPodError::BufferTooSmall),
+            "grow must not clobber the buffer when the account is too small"
+        );
+    }
+
+    assert_eq!(
+        buf, snapshot,
+        "failed commit must leave the serialized account unchanged"
+    );
+
+    let view = ProfileRef::new(&buf).unwrap();
+    assert_eq!(view.bio(), "hi");
+    assert_eq!(view.tags().len(), 1);
+    assert_eq!(view.tags()[0], tag);
 }
 
 #[test]
@@ -108,8 +148,11 @@ fn compact_mut_grow_then_shrink_then_grow() {
         profile.commit().unwrap();
     }
 
-    for bio in ["aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b", "cccccccccccccccccccccccccccccccccccccccccc"]
-    {
+    for bio in [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "b",
+        "cccccccccccccccccccccccccccccccccccccccccc",
+    ] {
         {
             let mut profile = ProfileMut::new(&mut buf).unwrap();
             profile.set_bio(bio).unwrap();
