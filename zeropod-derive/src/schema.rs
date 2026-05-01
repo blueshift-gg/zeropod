@@ -17,6 +17,10 @@ pub struct SchemaField {
     pub ty: syn::Type,
     pub kind: FieldKind,
     pub vis: syn::Visibility,
+    pub skip_accessor: bool,
+    /// Preserve `#[zeropod(...)]` attributes for pass-through.
+    #[allow(dead_code)]
+    pub zeropod_attrs: Vec<syn::Attribute>,
 }
 
 impl Schema {
@@ -60,11 +64,14 @@ impl Schema {
                 let name = f.ident.clone().expect("named field must have ident");
                 let ty = f.ty.clone();
                 let kind = classify_field(&ty);
+                let (skip_accessor, zeropod_attrs) = parse_zeropod_field_attrs(&f.attrs);
                 SchemaField {
                     name,
                     ty,
                     kind,
                     vis: f.vis.clone(),
+                    skip_accessor,
+                    zeropod_attrs,
                 }
             })
             .collect();
@@ -104,7 +111,31 @@ impl Schema {
             is_compact,
         })
     }
+}
 
+/// Parse `#[zeropod(...)]` attributes on a field.
+/// Returns (skip_accessor, zeropod_attrs_to_preserve).
+fn parse_zeropod_field_attrs(attrs: &[syn::Attribute]) -> (bool, Vec<syn::Attribute>) {
+    let mut skip_accessor = false;
+    let mut zeropod_attrs = Vec::new();
+
+    for attr in attrs {
+        if !attr.path().is_ident("zeropod") {
+            continue;
+        }
+        zeropod_attrs.push(attr.clone());
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip_accessor") {
+                skip_accessor = true;
+            }
+            Ok(())
+        });
+    }
+
+    (skip_accessor, zeropod_attrs)
+}
+
+impl Schema {
     pub fn inline_fields(&self) -> impl Iterator<Item = &SchemaField> {
         self.fields
             .iter()
