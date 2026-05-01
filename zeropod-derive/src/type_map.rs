@@ -89,17 +89,22 @@ pub fn map_to_pod_type(ty: &Type) -> TokenStream {
         return ts;
     }
 
-    // 4. Option
+    // 4. PodOption (must check before Option to avoid matching PodOption as generic)
+    if let Some(ts) = try_map_pod_option(ty) {
+        return ts;
+    }
+
+    // 5. Option
     if let Some(ts) = try_map_option(ty) {
         return ts;
     }
 
-    // 5. Array types → keep as-is
+    // 6. Array types → keep as-is
     if matches!(ty, Type::Array(_)) {
         return quote! { #ty };
     }
 
-    // 6. Fallback: delegate via ZcField trait
+    // 7. Fallback: delegate via ZcField trait
     quote! { <#ty as zeropod::ZcField>::Pod }
 }
 
@@ -166,6 +171,26 @@ fn try_map_option(ty: &Type) -> Option<TokenStream> {
     };
     let mapped_inner = map_to_pod_type(inner);
     Some(quote! { zeropod::pod::PodOption<#mapped_inner> })
+}
+
+fn try_map_pod_option(ty: &Type) -> Option<TokenStream> {
+    let seg = last_path_segment(ty)?;
+    if seg.ident != "PodOption" {
+        return None;
+    }
+    let args = angle_args(&seg.arguments)?;
+    let mut iter = args.iter();
+    let inner = match iter.next()? {
+        GenericArgument::Type(t) => t,
+        _ => return None,
+    };
+    let mapped_inner = map_to_pod_type(inner);
+    // Pass through PFX if present.
+    let pfx = iter.next();
+    match pfx {
+        Some(pfx_arg) => Some(quote! { zeropod::pod::PodOption<#mapped_inner, #pfx_arg> }),
+        None => Some(quote! { zeropod::pod::PodOption<#mapped_inner> }),
+    }
 }
 
 // ---------------------------------------------------------------------------

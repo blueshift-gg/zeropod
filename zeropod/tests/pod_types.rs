@@ -13,7 +13,7 @@ fn pod_option_none() {
 
 #[test]
 fn pod_option_some() {
-    let opt = PodOption::some(42u8);
+    let opt = PodOption::<u8>::some(42u8);
     assert!(opt.is_some());
     assert!(!opt.is_none());
     assert_eq!(opt.get(), Some(42u8));
@@ -50,9 +50,9 @@ fn pod_option_default() {
 
 #[test]
 fn pod_option_eq() {
-    let a = PodOption::some(5u8);
-    let b = PodOption::some(5u8);
-    let c = PodOption::some(6u8);
+    let a = PodOption::<u8>::some(5u8);
+    let b = PodOption::<u8>::some(5u8);
+    let c = PodOption::<u8>::some(6u8);
     let d = PodOption::<u8>::none();
     let e = PodOption::<u8>::none();
     assert_eq!(a, b);
@@ -63,7 +63,7 @@ fn pod_option_eq() {
 
 #[test]
 fn pod_option_debug() {
-    let some = PodOption::some(42u8);
+    let some = PodOption::<u8>::some(42u8);
     let none = PodOption::<u8>::none();
     assert_eq!(format!("{:?}", some), "Some(42)");
     assert_eq!(format!("{:?}", none), "None");
@@ -534,7 +534,9 @@ fn zc_elem_bound_compiles() {
 #[test]
 fn pod_vec_of_pod_option() {
     let mut v = PodVec::<PodOption<PodU64>, 3>::default();
-    assert!(v.try_push(PodOption::some(PodU64::from(42u64))).is_ok());
+    assert!(v
+        .try_push(PodOption::<PodU64>::some(PodU64::from(42u64)))
+        .is_ok());
     assert!(v.try_push(PodOption::<PodU64>::none()).is_ok());
     assert_eq!(v.len(), 2);
     assert_eq!(v.as_slice()[0].get(), Some(PodU64::from(42u64)));

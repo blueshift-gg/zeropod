@@ -105,7 +105,9 @@ unsafe impl<'__de, T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore>
 // PodOption
 // ---------------------------------------------------------------------------
 
-unsafe impl<T: Copy, C: ConfigCore> wincode::SchemaWrite<C> for PodOption<T> {
+unsafe impl<T: Copy, const PFX: usize, C: ConfigCore> wincode::SchemaWrite<C>
+    for PodOption<T, PFX>
+{
     type Src = Self;
 
     fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
@@ -127,7 +129,9 @@ unsafe impl<T: Copy, C: ConfigCore> wincode::SchemaWrite<C> for PodOption<T> {
     }
 }
 
-unsafe impl<'__de, T: ZcElem, C: ConfigCore> wincode::SchemaRead<'__de, C> for PodOption<T> {
+unsafe impl<'__de, T: ZcElem, const PFX: usize, C: ConfigCore> wincode::SchemaRead<'__de, C>
+    for PodOption<T, PFX>
+{
     type Dst = Self;
 
     fn read(

@@ -103,7 +103,7 @@ impl<T: ZcElem, const N: usize, const PFX: usize> ZcValidate for PodVec<T, N, PF
 
 // --- ZcValidate: PodOption (tag 0 or 1, inner valid if Some) ---
 
-impl<T: Copy + ZcValidate> ZcValidate for PodOption<T> {
+impl<T: Copy + ZcValidate, const PFX: usize> ZcValidate for PodOption<T, PFX> {
     #[inline(always)]
     fn validate_ref(value: &Self) -> Result<(), ZeroPodError> {
         match value.raw_tag() {
@@ -173,9 +173,9 @@ unsafe impl ZcElem for PodBool {}
 // SAFETY: [u8; N] is align 1, all bit patterns valid.
 unsafe impl<const N: usize> ZcElem for [u8; N] {}
 
-// SAFETY: PodOption<T: ZcElem> is #[repr(C)] with tag: u8 + MaybeUninit<T>.
-// T: ZcElem guarantees T is align 1, so PodOption<T> is also align 1.
-unsafe impl<T: ZcElem> ZcElem for PodOption<T> {}
+// SAFETY: PodOption<T: ZcElem, PFX> is #[repr(C)] with tag: [u8; PFX] + MaybeUninit<T>.
+// T: ZcElem guarantees T is align 1, so PodOption<T, PFX> is also align 1.
+unsafe impl<T: ZcElem, const PFX: usize> ZcElem for PodOption<T, PFX> {}
 
 // --- Feature-gated impls for external types ---
 
@@ -296,16 +296,17 @@ impl<T: ZcElem, const N: usize, const PFX: usize> ZcField for PodVec<T, N, PFX> 
     const POD_SIZE: usize = core::mem::size_of::<Self>();
 }
 
-impl<T: Copy> ZcField for PodOption<T> {
+impl<T: Copy, const PFX: usize> ZcField for PodOption<T, PFX> {
     type Pod = Self;
     const POD_SIZE: usize = core::mem::size_of::<Self>();
 }
 
+// Option<T> maps to PodOption<T::Pod, 1> (PFX=1 only, unchanged).
 impl<T> ZcField for Option<T>
 where
     T: ZcField,
     T::Pod: Copy,
 {
-    type Pod = PodOption<T::Pod>;
-    const POD_SIZE: usize = core::mem::size_of::<PodOption<T::Pod>>();
+    type Pod = PodOption<T::Pod, 1>;
+    const POD_SIZE: usize = core::mem::size_of::<PodOption<T::Pod, 1>>();
 }
