@@ -161,12 +161,10 @@ fn classify_accessor(ty: &Type, skip: bool) -> AccessorKind {
                         let _inner = iter.next(); // T
                         match iter.next() {
                             None => return AccessorKind::PodOptionGet, // default PFX=1
-                            Some(syn::GenericArgument::Const(syn::Expr::Lit(
-                                syn::ExprLit {
-                                    lit: syn::Lit::Int(lit),
-                                    ..
-                                },
-                            ))) => {
+                            Some(syn::GenericArgument::Const(syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Int(lit),
+                                ..
+                            }))) => {
                                 if lit.base10_parse::<usize>().ok() == Some(1) {
                                     return AccessorKind::PodOptionGet;
                                 }

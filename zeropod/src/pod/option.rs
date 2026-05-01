@@ -358,10 +358,7 @@ mod kani_proofs {
     fn none_zeroed_pfx4() {
         let pod = PodOption::<u8, 4>::none();
         let bytes = unsafe {
-            core::slice::from_raw_parts(
-                &pod as *const _ as *const u8,
-                core::mem::size_of_val(&pod),
-            )
+            core::slice::from_raw_parts(&pod as *const _ as *const u8, core::mem::size_of_val(&pod))
         };
         for &b in bytes {
             assert!(b == 0, "none() must produce all-zero bytes");
