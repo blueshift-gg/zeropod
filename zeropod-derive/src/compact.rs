@@ -12,11 +12,13 @@ pub fn generate(schema: &Schema) -> TokenStream {
     let header_name = format_ident!("{}Header", struct_name);
     let ref_name = format_ident!("{}Ref", struct_name);
     let mut_name = format_ident!("{}Mut", struct_name);
+    let (_, ty_generics, _) = schema.generics.split_for_impl();
+    let header_ty = quote! { #header_name #ty_generics };
 
     let header_ts = generate_header(schema, &header_name);
-    let trait_impl_ts = generate_trait_impl(schema, &header_name);
-    let ref_ts = generate_ref(schema, &header_name, &ref_name);
-    let mut_ts = generate_mut(schema, &header_name, &mut_name);
+    let trait_impl_ts = generate_trait_impl(schema, &header_ty);
+    let ref_ts = generate_ref(schema, &header_ty, &ref_name);
+    let mut_ts = generate_mut(schema, &header_ty, &mut_name);
 
     quote! {
         #header_ts
@@ -31,6 +33,8 @@ pub fn generate(schema: &Schema) -> TokenStream {
 // ---------------------------------------------------------------------------
 
 fn generate_header(schema: &Schema, header_name: &syn::Ident) -> TokenStream {
+    let generics = &schema.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let mut fields = Vec::new();
 
     let inline_field_names: Vec<&syn::Ident> = schema.inline_fields().map(|f| &f.name).collect();
@@ -52,16 +56,30 @@ fn generate_header(schema: &Schema, header_name: &syn::Ident) -> TokenStream {
         fields.push(quote! { #len_name: [u8; #pfx_lit] });
     }
 
+    let pod_bounds: Vec<_> = inline_pod_types
+        .iter()
+        .map(|pod_ty| quote! { #pod_ty: zeropod::ZcValidate })
+        .collect();
+    let where_clause_with_bounds = where_clause_with_bounds(where_clause, pod_bounds.iter());
+
+    let align_assert = if schema.generics.params.is_empty() {
+        quote! {
+            const _: () = assert!(core::mem::align_of::<#header_name>() == 1);
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #[repr(C)]
         #[derive(Clone, Copy)]
-        pub struct #header_name {
+        pub struct #header_name #generics #where_clause_with_bounds {
             #( #fields ),*
         }
 
-        const _: () = assert!(core::mem::align_of::<#header_name>() == 1);
+        #align_assert
 
-        impl zeropod::ZcValidate for #header_name {
+        impl #impl_generics zeropod::ZcValidate for #header_name #ty_generics #where_clause_with_bounds {
             fn validate_ref(value: &Self) -> Result<(), zeropod::ZeroPodError> {
                 #(<#inline_pod_types as zeropod::ZcValidate>::validate_ref(&value.#inline_field_names)?;)*
                 Ok(())
@@ -74,13 +92,16 @@ fn generate_header(schema: &Schema, header_name: &syn::Ident) -> TokenStream {
 // ZeroPodCompact trait impl
 // ---------------------------------------------------------------------------
 
-fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream {
+fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream {
     let struct_name = &schema.name;
+    let (impl_generics, ty_generics, where_clause) = schema.generics.split_for_impl();
+    let bounds = compact_bounds(schema);
+    let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
     let mut validations = Vec::new();
 
     // Inline field validation via ZcValidate on the header.
     validations.push(quote! {
-        <#header_name as zeropod::ZcValidate>::validate_ref(__hdr)?;
+        <#header_ty as zeropod::ZcValidate>::validate_ref(__hdr)?;
     });
 
     // Tail field length checks + UTF-8 validation for strings.
@@ -93,10 +114,9 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
 
         match &f.kind {
             FieldKind::Tail(TailField::String { max, .. }) => {
-                let max_lit = *max;
                 validations.push(quote! {
                     let #len_name = #read_len;
-                    if #len_name > #max_lit {
+                    if #len_name > #max {
                         return Err(zeropod::ZeroPodError::InvalidLength);
                     }
                 });
@@ -106,11 +126,10 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
                 tail_offset_parts.push(Some(len_name.clone()));
             }
             FieldKind::Tail(TailField::Vec { elem, max, .. }) => {
-                let max_lit = *max;
                 let mapped_elem = map_to_pod_type(elem);
                 validations.push(quote! {
                     let #len_name = #read_len;
-                    if #len_name > #max_lit {
+                    if #len_name > #max {
                         return Err(zeropod::ZeroPodError::InvalidLength);
                     }
                 });
@@ -128,7 +147,7 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
     } else {
         quote! {
             let __total_tail: usize = 0 #( + #tail_size_exprs )*;
-            if core::mem::size_of::<#header_name>() + __total_tail > data.len() {
+            if core::mem::size_of::<#header_ty>() + __total_tail > data.len() {
                 return Err(zeropod::ZeroPodError::BufferTooSmall);
             }
         }
@@ -145,7 +164,7 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
             let preceding_exprs: Vec<TokenStream> = tail_size_exprs[..i].to_vec();
             utf8_checks.push(quote! {
                 {
-                    let __str_offset = core::mem::size_of::<#header_name>() #( + #preceding_exprs )*;
+                    let __str_offset = core::mem::size_of::<#header_ty>() #( + #preceding_exprs )*;
                     if core::str::from_utf8(&data[__str_offset..__str_offset + #len_name]).is_err() {
                         return Err(zeropod::ZeroPodError::InvalidUtf8);
                     }
@@ -163,7 +182,7 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
             let preceding_exprs: Vec<TokenStream> = tail_size_exprs[..i].to_vec();
             vec_elem_checks.push(quote! {
                 {
-                    let __vec_offset = core::mem::size_of::<#header_name>() #( + #preceding_exprs )*;
+                    let __vec_offset = core::mem::size_of::<#header_ty>() #( + #preceding_exprs )*;
                     let __elem_size = core::mem::size_of::<#mapped_elem>();
                     for __i in 0..#len_name {
                         let __elem_ptr = unsafe {
@@ -177,29 +196,29 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
     }
 
     quote! {
-        impl zeropod::ZeroPodSchema for #struct_name {
+        impl #impl_generics zeropod::ZeroPodSchema for #struct_name #ty_generics #where_clause_with_bounds {
             const LAYOUT: zeropod::LayoutKind = zeropod::LayoutKind::Compact;
         }
 
-        impl zeropod::ZeroPodCompact for #struct_name {
-            type Header = #header_name;
-            const HEADER_SIZE: usize = core::mem::size_of::<#header_name>();
+        impl #impl_generics zeropod::ZeroPodCompact for #struct_name #ty_generics #where_clause_with_bounds {
+            type Header = #header_ty;
+            const HEADER_SIZE: usize = core::mem::size_of::<#header_ty>();
 
             fn header(data: &[u8]) -> Result<&Self::Header, zeropod::ZeroPodError> {
                 Self::validate(data)?;
-                Ok(unsafe { &*(data.as_ptr() as *const #header_name) })
+                Ok(unsafe { &*(data.as_ptr() as *const #header_ty) })
             }
 
             fn header_mut(data: &mut [u8]) -> Result<&mut Self::Header, zeropod::ZeroPodError> {
                 Self::validate(data)?;
-                Ok(unsafe { &mut *(data.as_mut_ptr() as *mut #header_name) })
+                Ok(unsafe { &mut *(data.as_mut_ptr() as *mut #header_ty) })
             }
 
             fn validate(data: &[u8]) -> Result<(), zeropod::ZeroPodError> {
-                if data.len() < core::mem::size_of::<#header_name>() {
+                if data.len() < core::mem::size_of::<#header_ty>() {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
                 }
-                let __hdr = unsafe { &*(data.as_ptr() as *const #header_name) };
+                let __hdr = unsafe { &*(data.as_ptr() as *const #header_ty) };
                 #( #validations )*
                 #total_check
                 #( #utf8_checks )*
@@ -214,14 +233,19 @@ fn generate_trait_impl(schema: &Schema, header_name: &syn::Ident) -> TokenStream
 // Ref generation
 // ---------------------------------------------------------------------------
 
-fn generate_ref(schema: &Schema, header_name: &syn::Ident, ref_name: &syn::Ident) -> TokenStream {
+fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident) -> TokenStream {
     let struct_name = &schema.name;
+    let (_, struct_ty_generics, where_clause) = schema.generics.split_for_impl();
+    let ref_generics = generics_with_lifetime(&schema.generics);
+    let (ref_impl_generics, ref_ty_generics, _) = ref_generics.split_for_impl();
+    let bounds = compact_bounds(schema);
+    let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
     let tail_fields: Vec<_> = schema.tail_fields().collect();
     let mut accessors = Vec::new();
 
     for (i, f) in tail_fields.iter().enumerate() {
         let fname = &f.name;
-        let offset_computation = compute_offset_tokens(header_name, &tail_fields, i);
+        let offset_computation = compute_offset_tokens(header_ty, &tail_fields, i);
 
         match &f.kind {
             FieldKind::Tail(TailField::String { pfx, .. }) => {
@@ -260,38 +284,21 @@ fn generate_ref(schema: &Schema, header_name: &syn::Ident, ref_name: &syn::Ident
         }
     }
 
-    // Compile-time assertion: Vec tail element types must implement ZcElem.
-    // ZcElem guarantees align-1, valid validation, and safe packed-byte access.
-    let mut align_assertions = Vec::new();
-    for f in &tail_fields {
-        if let FieldKind::Tail(TailField::Vec { elem, .. }) = &f.kind {
-            let mapped_elem = map_to_pod_type(elem);
-            align_assertions.push(quote! {
-                const _: fn() = || {
-                    fn assert_zc_elem<T: zeropod::ZcElem>() {}
-                    assert_zc_elem::<#mapped_elem>();
-                };
-            });
-        }
-    }
-
     quote! {
-        #( #align_assertions )*
-
-        pub struct #ref_name<'a> {
+        pub struct #ref_name #ref_generics #where_clause_with_bounds {
             data: &'a [u8],
         }
 
-        impl<'a> core::ops::Deref for #ref_name<'a> {
-            type Target = #header_name;
-            fn deref(&self) -> &#header_name {
+        impl #ref_impl_generics core::ops::Deref for #ref_name #ref_ty_generics #where_clause_with_bounds {
+            type Target = #header_ty;
+            fn deref(&self) -> &#header_ty {
                 self.header()
             }
         }
 
-        impl<'a> #ref_name<'a> {
+        impl #ref_impl_generics #ref_name #ref_ty_generics #where_clause_with_bounds {
             pub fn new(data: &'a [u8]) -> Result<Self, zeropod::ZeroPodError> {
-                <#struct_name as zeropod::ZeroPodCompact>::validate(data)?;
+                <#struct_name #struct_ty_generics as zeropod::ZeroPodCompact>::validate(data)?;
                 Ok(Self { data })
             }
 
@@ -299,8 +306,8 @@ fn generate_ref(schema: &Schema, header_name: &syn::Ident, ref_name: &syn::Ident
                 Self { data }
             }
 
-            fn header(&self) -> &'a #header_name {
-                unsafe { &*(self.data.as_ptr() as *const #header_name) }
+            fn header(&self) -> &'a #header_ty {
+                unsafe { &*(self.data.as_ptr() as *const #header_ty) }
             }
 
             #( #accessors )*
@@ -312,8 +319,13 @@ fn generate_ref(schema: &Schema, header_name: &syn::Ident, ref_name: &syn::Ident
 // Mut generation
 // ---------------------------------------------------------------------------
 
-fn generate_mut(schema: &Schema, header_name: &syn::Ident, mut_name: &syn::Ident) -> TokenStream {
+fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident) -> TokenStream {
     let struct_name = &schema.name;
+    let (_, struct_ty_generics, where_clause) = schema.generics.split_for_impl();
+    let mut_generics = generics_with_lifetime(&schema.generics);
+    let (mut_impl_generics, mut_ty_generics, _) = mut_generics.split_for_impl();
+    let bounds = compact_bounds(schema);
+    let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
     let tail_fields: Vec<_> = schema.tail_fields().collect();
 
     // Edit descriptor fields.
@@ -348,10 +360,9 @@ fn generate_mut(schema: &Schema, header_name: &syn::Ident, mut_name: &syn::Ident
 
         match &f.kind {
             FieldKind::Tail(TailField::String { max, .. }) => {
-                let max_lit = *max;
                 setters.push(quote! {
                     pub fn #setter_name(&mut self, value: &'a str) -> Result<(), zeropod::ZeroPodError> {
-                        if value.len() > #max_lit {
+                        if value.len() > #max {
                             return Err(zeropod::ZeroPodError::Overflow);
                         }
                         self.#edit_name = Some((value.as_ptr(), value.len()));
@@ -360,11 +371,10 @@ fn generate_mut(schema: &Schema, header_name: &syn::Ident, mut_name: &syn::Ident
                 });
             }
             FieldKind::Tail(TailField::Vec { elem, max, .. }) => {
-                let max_lit = *max;
                 let mapped_elem = map_to_pod_type(elem);
                 setters.push(quote! {
                     pub fn #setter_name(&mut self, value: &'a [#mapped_elem]) -> Result<(), zeropod::ZeroPodError> {
-                        if value.len() > #max_lit {
+                        if value.len() > #max {
                             return Err(zeropod::ZeroPodError::Overflow);
                         }
                         self.#edit_name = Some((
@@ -416,31 +426,31 @@ fn generate_mut(schema: &Schema, header_name: &syn::Ident, mut_name: &syn::Ident
     }
 
     // commit()
-    let commit_body = generate_commit_body(header_name, &tail_fields);
+    let commit_body = generate_commit_body(header_ty, &tail_fields);
 
     quote! {
-        pub struct #mut_name<'a> {
+        pub struct #mut_name #mut_generics #where_clause_with_bounds {
             data: &'a mut [u8],
             total_len: usize,
             #( #edit_fields ),*
         }
 
-        impl<'a> core::ops::Deref for #mut_name<'a> {
-            type Target = #header_name;
-            fn deref(&self) -> &#header_name {
+        impl #mut_impl_generics core::ops::Deref for #mut_name #mut_ty_generics #where_clause_with_bounds {
+            type Target = #header_ty;
+            fn deref(&self) -> &#header_ty {
                 self.header()
             }
         }
 
-        impl<'a> core::ops::DerefMut for #mut_name<'a> {
-            fn deref_mut(&mut self) -> &mut #header_name {
+        impl #mut_impl_generics core::ops::DerefMut for #mut_name #mut_ty_generics #where_clause_with_bounds {
+            fn deref_mut(&mut self) -> &mut #header_ty {
                 self.header_mut()
             }
         }
 
-        impl<'a> #mut_name<'a> {
+        impl #mut_impl_generics #mut_name #mut_ty_generics #where_clause_with_bounds {
             pub fn new(data: &'a mut [u8]) -> Result<Self, zeropod::ZeroPodError> {
-                <#struct_name as zeropod::ZeroPodCompact>::validate(data)?;
+                <#struct_name #struct_ty_generics as zeropod::ZeroPodCompact>::validate(data)?;
                 let total_len = data.len();
                 Ok(Self {
                     data,
@@ -462,18 +472,18 @@ fn generate_mut(schema: &Schema, header_name: &syn::Ident, mut_name: &syn::Ident
                 }
             }
 
-            fn header(&self) -> &#header_name {
-                unsafe { &*(self.data.as_ptr() as *const #header_name) }
+            fn header(&self) -> &#header_ty {
+                unsafe { &*(self.data.as_ptr() as *const #header_ty) }
             }
 
-            fn header_mut(&mut self) -> &mut #header_name {
-                unsafe { &mut *(self.data.as_mut_ptr() as *mut #header_name) }
+            fn header_mut(&mut self) -> &mut #header_ty {
+                unsafe { &mut *(self.data.as_mut_ptr() as *mut #header_ty) }
             }
 
             #( #setters )*
 
             pub fn projected_size(&self) -> usize {
-                core::mem::size_of::<#header_name>()
+                core::mem::size_of::<#header_ty>()
                 #( #proj_parts )*
             }
 
@@ -483,18 +493,18 @@ fn generate_mut(schema: &Schema, header_name: &syn::Ident, mut_name: &syn::Ident
 }
 
 fn generate_commit_body(
-    header_name: &syn::Ident,
+    header_ty: &TokenStream,
     tail_fields: &[&crate::schema::SchemaField],
 ) -> TokenStream {
     if tail_fields.is_empty() {
         return quote! {
             pub fn commit(&mut self) -> Result<usize, zeropod::ZeroPodError> {
-                Ok(core::mem::size_of::<#header_name>())
+                Ok(core::mem::size_of::<#header_ty>())
             }
         };
     }
 
-    let header_size = quote! { core::mem::size_of::<#header_name>() };
+    let header_size = quote! { core::mem::size_of::<#header_ty>() };
 
     // Step 1: compute per-field old_len / new_len snapshots.
     let mut setup_lens = Vec::new();
@@ -735,6 +745,49 @@ fn generate_commit_body(
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn compact_bounds(schema: &Schema) -> Vec<TokenStream> {
+    let mut bounds: Vec<TokenStream> = schema
+        .inline_fields()
+        .map(|f| {
+            let pod_ty = map_to_pod_type(&f.ty);
+            quote! { #pod_ty: zeropod::ZcValidate }
+        })
+        .collect();
+
+    bounds.extend(schema.tail_fields().filter_map(|f| {
+        if let FieldKind::Tail(TailField::Vec { elem, .. }) = &f.kind {
+            let mapped_elem = map_to_pod_type(elem);
+            Some(quote! { #mapped_elem: zeropod::ZcElem })
+        } else {
+            None
+        }
+    }));
+
+    bounds
+}
+
+fn where_clause_with_bounds<'a>(
+    where_clause: Option<&syn::WhereClause>,
+    bounds: impl IntoIterator<Item = &'a TokenStream>,
+) -> TokenStream {
+    let bounds: Vec<&TokenStream> = bounds.into_iter().collect();
+    match (where_clause, bounds.is_empty()) {
+        (Some(existing), false) => {
+            let predicates = existing.predicates.iter();
+            quote! { where #(#predicates,)* #(#bounds,)* }
+        }
+        (Some(existing), true) => quote! { #existing },
+        (None, false) => quote! { where #(#bounds,)* },
+        (None, true) => quote! {},
+    }
+}
+
+fn generics_with_lifetime(generics: &syn::Generics) -> syn::Generics {
+    let mut generics = generics.clone();
+    generics.params.insert(0, syn::parse_quote!('a));
+    generics
+}
+
 fn read_len_expr(len_name: &syn::Ident, pfx: usize) -> TokenStream {
     match pfx {
         1 => quote! { __hdr.#len_name[0] as usize },
@@ -754,11 +807,11 @@ fn tail_pfx(kind: &FieldKind) -> usize {
 }
 
 fn compute_offset_tokens(
-    header_name: &syn::Ident,
+    header_ty: &TokenStream,
     tail_fields: &[&crate::schema::SchemaField],
     target_index: usize,
 ) -> TokenStream {
-    let header_size = quote! { core::mem::size_of::<#header_name>() };
+    let header_size = quote! { core::mem::size_of::<#header_ty>() };
 
     if target_index == 0 {
         return quote! { let __offset = #header_size; };

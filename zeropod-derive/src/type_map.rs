@@ -17,12 +17,12 @@ pub enum FieldKind {
 #[derive(Debug, Clone)]
 pub enum TailField {
     String {
-        max: usize,
+        max: Expr,
         pfx: usize,
     },
     Vec {
         elem: Box<Type>,
-        max: usize,
+        max: Expr,
         pfx: usize,
     },
 }
@@ -44,7 +44,7 @@ fn classify_string(ty: &Type) -> Option<TailField> {
     }
     let args = angle_args(&seg.arguments)?;
     let mut iter = args.iter();
-    let max = extract_const_usize(iter.next()?)?;
+    let max = extract_const_expr(iter.next()?)?;
     let pfx = iter.next().and_then(parse_prefix_arg).unwrap_or(1);
     Some(TailField::String { max, pfx })
 }
@@ -60,7 +60,7 @@ fn classify_vec(ty: &Type) -> Option<TailField> {
         GenericArgument::Type(t) => t.clone(),
         _ => return None,
     };
-    let max = extract_const_usize(iter.next()?)?;
+    let max = extract_const_expr(iter.next()?)?;
     let pfx = iter.next().and_then(parse_prefix_arg).unwrap_or(2);
     Some(TailField::Vec {
         elem: Box::new(elem),
@@ -225,15 +225,18 @@ fn angle_args(
     }
 }
 
-fn extract_const_usize(arg: &GenericArgument) -> Option<usize> {
-    if let GenericArgument::Const(Expr::Lit(ExprLit {
-        lit: Lit::Int(lit_int),
-        ..
-    })) = arg
-    {
-        lit_int.base10_parse::<usize>().ok()
-    } else {
-        None
+fn extract_const_expr(arg: &GenericArgument) -> Option<Expr> {
+    match arg {
+        GenericArgument::Const(expr) => Some(expr.clone()),
+        GenericArgument::Type(Type::Path(type_path))
+            if type_path.qself.is_none()
+                && type_path.path.leading_colon.is_none()
+                && type_path.path.segments.len() == 1 =>
+        {
+            let ident = &type_path.path.segments[0].ident;
+            Some(syn::parse_quote!(#ident))
+        }
+        _ => None,
     }
 }
 

@@ -11,6 +11,14 @@ struct Profile {
     pub tags: zeropod::Vec<[u8; 32], 20>,
 }
 
+#[allow(dead_code)]
+#[derive(ZeroPod)]
+#[zeropod(compact)]
+struct ConstTailProfile<const BIO_CAP: usize, const TAG_CAP: usize> {
+    pub bio: zeropod::String<BIO_CAP>,
+    pub tags: zeropod::Vec<[u8; 4], TAG_CAP>,
+}
+
 // --- Header tests ---
 
 #[test]
@@ -26,6 +34,32 @@ fn compact_header_alignment() {
         core::mem::align_of::<<Profile as zeropod::ZeroPodCompact>::Header>(),
         1
     );
+}
+
+#[test]
+fn compact_const_generic_tail_capacity() {
+    assert_eq!(
+        <ConstTailProfile<5, 2> as zeropod::ZeroPodCompact>::HEADER_SIZE,
+        3
+    );
+
+    let mut buf = vec![0u8; 32];
+    {
+        let mut profile = ConstTailProfileMut::<5, 2>::new(&mut buf).unwrap();
+        profile.set_bio("hello").unwrap();
+        profile.set_tags(&[[1; 4], [2; 4]]).unwrap();
+        let new_size = profile.commit().unwrap();
+        assert_eq!(new_size, 3 + 5 + 8);
+    }
+
+    let profile = ConstTailProfileRef::<5, 2>::new(&buf).unwrap();
+    assert_eq!(profile.bio(), "hello");
+    assert_eq!(profile.tags(), &[[1; 4], [2; 4]]);
+    drop(profile);
+
+    let mut profile = ConstTailProfileMut::<5, 2>::new(&mut buf).unwrap();
+    assert!(profile.set_bio("too long").is_err());
+    assert!(profile.set_tags(&[[0; 4], [1; 4], [2; 4]]).is_err());
 }
 
 // --- Ref tests ---
