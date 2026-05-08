@@ -16,18 +16,35 @@ pub enum FieldKind {
 
 #[derive(Debug, Clone)]
 pub enum TailField {
+    Segment {
+        presence: TailPresence,
+        payload: TailPayload,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TailPresence {
+    Always,
+    OptionTag,
+}
+
+#[derive(Debug, Clone)]
+pub enum TailPayload {
     String {
-        max: usize,
+        max: Expr,
         pfx: usize,
     },
     Vec {
         elem: Box<Type>,
-        max: usize,
+        max: Expr,
         pfx: usize,
     },
 }
 
 pub fn classify_field(ty: &Type) -> FieldKind {
+    if let Some(tail) = classify_option_dynamic(ty) {
+        return FieldKind::Tail(tail);
+    }
     if let Some(tail) = classify_string(ty) {
         return FieldKind::Tail(tail);
     }
@@ -44,9 +61,12 @@ fn classify_string(ty: &Type) -> Option<TailField> {
     }
     let args = angle_args(&seg.arguments)?;
     let mut iter = args.iter();
-    let max = extract_const_usize(iter.next()?)?;
+    let max = extract_const_expr(iter.next()?)?;
     let pfx = iter.next().and_then(parse_prefix_arg).unwrap_or(1);
-    Some(TailField::String { max, pfx })
+    Some(TailField::Segment {
+        presence: TailPresence::Always,
+        payload: TailPayload::String { max, pfx },
+    })
 }
 
 fn classify_vec(ty: &Type) -> Option<TailField> {
@@ -60,13 +80,71 @@ fn classify_vec(ty: &Type) -> Option<TailField> {
         GenericArgument::Type(t) => t.clone(),
         _ => return None,
     };
-    let max = extract_const_usize(iter.next()?)?;
+    let max = extract_const_expr(iter.next()?)?;
     let pfx = iter.next().and_then(parse_prefix_arg).unwrap_or(2);
-    Some(TailField::Vec {
-        elem: Box::new(elem),
-        max,
-        pfx,
+    Some(TailField::Segment {
+        presence: TailPresence::Always,
+        payload: TailPayload::Vec {
+            elem: Box::new(elem),
+            max,
+            pfx,
+        },
     })
+}
+
+fn classify_option_dynamic(ty: &Type) -> Option<TailField> {
+    let seg = last_path_segment(ty)?;
+    if seg.ident != "Option" {
+        return None;
+    }
+    let args = angle_args(&seg.arguments)?;
+    let inner = match args.first()? {
+        GenericArgument::Type(t) => t,
+        _ => return None,
+    };
+    if let Some(TailField::Segment {
+        payload: TailPayload::String { max, pfx },
+        ..
+    }) = classify_string(inner)
+    {
+        return Some(TailField::Segment {
+            presence: TailPresence::OptionTag,
+            payload: TailPayload::String { max, pfx },
+        });
+    }
+    if let Some(TailField::Segment {
+        payload: TailPayload::Vec { elem, max, pfx },
+        ..
+    }) = classify_vec(inner)
+    {
+        return Some(TailField::Segment {
+            presence: TailPresence::OptionTag,
+            payload: TailPayload::Vec { elem, max, pfx },
+        });
+    }
+    None
+}
+
+impl TailField {
+    pub fn presence(&self) -> TailPresence {
+        match self {
+            Self::Segment { presence, .. } => *presence,
+        }
+    }
+
+    pub fn payload(&self) -> &TailPayload {
+        match self {
+            Self::Segment { payload, .. } => payload,
+        }
+    }
+}
+
+impl TailPayload {
+    pub fn pfx(&self) -> usize {
+        match self {
+            Self::String { pfx, .. } | Self::Vec { pfx, .. } => *pfx,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,15 +303,18 @@ fn angle_args(
     }
 }
 
-fn extract_const_usize(arg: &GenericArgument) -> Option<usize> {
-    if let GenericArgument::Const(Expr::Lit(ExprLit {
-        lit: Lit::Int(lit_int),
-        ..
-    })) = arg
-    {
-        lit_int.base10_parse::<usize>().ok()
-    } else {
-        None
+fn extract_const_expr(arg: &GenericArgument) -> Option<Expr> {
+    match arg {
+        GenericArgument::Const(expr) => Some(expr.clone()),
+        GenericArgument::Type(Type::Path(type_path))
+            if type_path.qself.is_none()
+                && type_path.path.leading_colon.is_none()
+                && type_path.path.segments.len() == 1 =>
+        {
+            let ident = &type_path.path.segments[0].ident;
+            Some(syn::parse_quote!(#ident))
+        }
+        _ => None,
     }
 }
 

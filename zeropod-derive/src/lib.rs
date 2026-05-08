@@ -4,6 +4,7 @@ use {
 };
 
 mod compact;
+mod compact_enum;
 mod fixed;
 mod schema;
 mod type_map;
@@ -13,7 +14,13 @@ pub fn derive_zero_pod(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let output = match &input.data {
-        syn::Data::Enum(_) => fixed::generate_enum(&input),
+        syn::Data::Enum(_) => {
+            if has_compact_attr(&input.attrs) {
+                compact_enum::generate(&input)
+            } else {
+                fixed::generate_enum(&input)
+            }
+        }
         syn::Data::Struct(_) => {
             let schema = match schema::Schema::parse(&input) {
                 Ok(s) => s,
@@ -32,4 +39,20 @@ pub fn derive_zero_pod(input: TokenStream) -> TokenStream {
     };
 
     output.into()
+}
+
+fn has_compact_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("zeropod") {
+            return false;
+        }
+        let mut found = false;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("compact") {
+                found = true;
+            }
+            Ok(())
+        });
+        found
+    })
 }
