@@ -130,7 +130,10 @@ enum AccessorKind {
     Borrow,
     /// `PodOption<T, 1>` — return `Option<T>` via `.get()`.
     PodOptionGet,
-    /// `PodOption<T, PFX≠1>` or `#[zeropod(skip_accessor)]` — skip.
+    /// `PodOption<T, PFX>` with an explicit non-default prefix — borrow via
+    /// `.get_ref()` to avoid copying wider COption-style payloads.
+    PodOptionRef,
+    /// `#[zeropod(skip_accessor)]` — skip.
     Skip,
 }
 
@@ -154,9 +157,7 @@ fn classify_accessor(ty: &Type, skip: bool) -> AccessorKind {
                 "i128" => return AccessorKind::NativeViaFrom(quote! { i128 }),
                 "bool" => return AccessorKind::NativeViaFrom(quote! { bool }),
                 "PodOption" => {
-                    // Check PFX — only auto-generate for PFX=1 (default).
                     if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                        // If there's a second arg (PFX), check if it's 1.
                         let mut iter = ab.args.iter();
                         let _inner = iter.next(); // T
                         match iter.next() {
@@ -168,9 +169,9 @@ fn classify_accessor(ty: &Type, skip: bool) -> AccessorKind {
                                 if lit.base10_parse::<usize>().ok() == Some(1) {
                                     return AccessorKind::PodOptionGet;
                                 }
-                                return AccessorKind::Skip; // PFX≠1
+                                return AccessorKind::PodOptionRef;
                             }
-                            _ => return AccessorKind::Skip,
+                            _ => return AccessorKind::PodOptionRef,
                         }
                     }
                     return AccessorKind::PodOptionGet;
@@ -248,6 +249,15 @@ fn generate_accessors(schema: &Schema) -> TokenStream {
                         #[inline(always)]
                         pub fn #name(&self) -> Option<#inner_ty> {
                             self.#name.get()
+                        }
+                    })
+                }
+                AccessorKind::PodOptionRef => {
+                    let inner_ty = extract_pod_option_inner(&f.ty);
+                    Some(quote! {
+                        #[inline(always)]
+                        pub fn #name(&self) -> Option<&#inner_ty> {
+                            self.#name.get_ref()
                         }
                     })
                 }

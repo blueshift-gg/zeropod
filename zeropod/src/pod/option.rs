@@ -124,6 +124,11 @@ impl<T: Copy, const PFX: usize> PodOption<T, PFX> {
         self.decode_tag()
     }
 
+    #[inline(always)]
+    pub fn tag_valid(&self) -> bool {
+        self.raw_tag() <= 1
+    }
+
     /// # Safety
     /// Caller must ensure tag == 1 (Some).
     #[inline(always)]

@@ -7,6 +7,7 @@ fn pod_option_none() {
     let opt = PodOption::<u8>::none();
     assert!(opt.is_none());
     assert!(!opt.is_some());
+    assert!(opt.tag_valid());
     assert_eq!(opt.get(), None);
     assert_eq!(opt.raw_tag(), 0);
 }
@@ -16,8 +17,21 @@ fn pod_option_some() {
     let opt = PodOption::<u8>::some(42u8);
     assert!(opt.is_some());
     assert!(!opt.is_none());
+    assert!(opt.tag_valid());
     assert_eq!(opt.get(), Some(42u8));
     assert_eq!(opt.raw_tag(), 1);
+}
+
+#[test]
+fn pod_option_tag_valid_all_prefixes() {
+    assert!(PodOption::<u8, 1>::some(1).tag_valid());
+    assert!(PodOption::<u8, 2>::some(1).tag_valid());
+    assert!(PodOption::<u8, 4>::some(1).tag_valid());
+
+    let invalid = [2u8, 0, 0, 0, 0];
+    let opt = unsafe { &*(invalid.as_ptr() as *const PodOption<u8, 4>) };
+    assert_eq!(opt.raw_tag(), 2);
+    assert!(!opt.tag_valid());
 }
 
 #[test]
