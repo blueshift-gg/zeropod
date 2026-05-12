@@ -70,6 +70,13 @@ struct WithCollections {
     pub maybe: Option<u64>,
 }
 
+#[allow(dead_code)]
+#[derive(ZeroPod)]
+struct WideOptions {
+    pub authority: PodOption<[u8; 32], 4>,
+    pub amount: PodOption<PodU64, 4>,
+}
+
 #[test]
 fn fixed_collections_size() {
     // [u8;32](32) + PodString<32,1>(1+32=33) + PodVec<u8,10,2>(2+10=12) +
@@ -83,6 +90,22 @@ fn fixed_collections_alignment() {
         core::mem::align_of::<<WithCollections as zeropod::ZeroPodFixed>::Zc>(),
         1
     );
+}
+
+#[test]
+fn fixed_pfx4_pod_option_accessors_borrow() {
+    let mut buf = vec![0u8; <WideOptions as zeropod::ZeroPodFixed>::SIZE];
+    let authority = [7u8; 32];
+
+    {
+        let zc = WideOptions::from_bytes_mut(&mut buf).unwrap();
+        zc.authority = PodOption::<[u8; 32], 4>::some(authority);
+        zc.amount = PodOption::<PodU64, 4>::some(PodU64::from(123));
+    }
+
+    let zc = WideOptions::from_bytes(&buf).unwrap();
+    assert_eq!(zc.authority(), Some(&authority));
+    assert_eq!(zc.amount().map(|value| value.get()), Some(123));
 }
 
 #[test]
