@@ -1,6 +1,6 @@
 [package]
 name = "zeropod"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/blueshift-gg/zeropod"
@@ -15,7 +15,7 @@ solana-program-error = ["dep:solana-program-error"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [dependencies]
-zeropod-derive = { version = "=0.3.1", path = "../zeropod-derive" }
-wincode = { version = "0.5.3", features = ["derive"], optional = true }
+zeropod-derive = { version = "=0.3.2", path = "../zeropod-derive" }
+wincode = { version = "0.4.9", features = ["derive"], optional = true }
 solana-address = { version = ">=2.2, <2.6", optional = true, features = ["copy"] }
 solana-program-error = { version = ">=1.0, <4.0", optional = true }
