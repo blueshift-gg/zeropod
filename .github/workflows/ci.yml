@@ -78,4 +78,4 @@ jobs:
       - name: Verify zeropod
         uses: model-checking/kani-github-action@v1
         with:
-          command: cargo kani -p zeropod
+          command: cargo kani -p zeropod --features kani

@@ -649,7 +649,7 @@ const _: () = assert!(core::mem::size_of::<PodI16>() == 2);
 // Kani model-checking proof harnesses
 // ---------------------------------------------------------------------------
 
-#[cfg(kani)]
+#[cfg(all(kani, feature = "kani"))]
 mod kani_proofs {
     use super::*;
 

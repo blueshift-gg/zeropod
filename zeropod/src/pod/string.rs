@@ -273,7 +273,7 @@ impl<const N: usize, const PFX: usize> core::hash::Hash for PodString<N, PFX> {
 // Kani model-checking proof harnesses
 // ---------------------------------------------------------------------------
 
-#[cfg(kani)]
+#[cfg(all(kani, feature = "kani"))]
 mod kani_proofs {
     use super::*;
 
