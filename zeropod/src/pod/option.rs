@@ -207,7 +207,7 @@ impl<T: Copy + core::fmt::Debug, const PFX: usize> core::fmt::Debug for PodOptio
     }
 }
 
-#[cfg(kani)]
+#[cfg(all(kani, feature = "kani"))]
 mod kani_proofs {
     use super::*;
 
