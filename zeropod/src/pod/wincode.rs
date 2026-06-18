@@ -2,12 +2,38 @@
 //! derive (generic params, `MaybeUninit` fields).  Each impl serializes the
 //! full fixed-size byte representation via raw pointer cast — matching the
 //! zero-copy layout used on-chain.
+//!
+//! `PodString` and `PodVec` keep their dynamic data in a `[MaybeUninit<_>; N]`
+//! capacity array: only the length prefix and the first `len` bytes are
+//! initialized, the rest of the capacity is uninitialized. Serializing them by
+//! casting the whole struct to `&[u8]` would read that uninitialized capacity,
+//! which is undefined behavior and also leaks stale stack/heap bytes into the
+//! output (making it non-deterministic). Instead we write the initialized
+//! prefix + active bytes and zero-fill the remaining capacity, so the on-wire
+//! image stays a fixed `size_of::<Self>()` bytes but is fully initialized and
+//! deterministic.
 
 use {
     super::{option::PodOption, string::PodString, vec::PodVec},
     crate::traits::ZcElem,
     wincode::config::ConfigCore,
 };
+
+/// Write `n` zero bytes without allocating, used to pad a fixed-size pod image
+/// out to its declared `size_of` once the initialized bytes have been written.
+#[inline]
+fn write_zeroed_padding(
+    mut writer: impl wincode::io::Writer,
+    mut n: usize,
+) -> wincode::error::WriteResult<()> {
+    const ZEROS: [u8; 64] = [0u8; 64];
+    while n > 0 {
+        let chunk = n.min(ZEROS.len());
+        writer.write(&ZEROS[..chunk])?;
+        n -= chunk;
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // PodString
@@ -26,13 +52,18 @@ unsafe impl<const N: usize, const PFX: usize, C: ConfigCore> wincode::SchemaWrit
         mut __writer: impl wincode::io::Writer,
         src: &Self,
     ) -> wincode::error::WriteResult<()> {
-        let __bytes = unsafe {
-            core::slice::from_raw_parts(
-                src as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
-        };
-        __writer.write(__bytes)?;
+        // Initialized region is the PFX-byte length prefix followed by the
+        // first `len` data bytes; both live contiguously at the front of the
+        // (align-1, padding-free) struct.
+        let __init_len = PFX + src.len();
+        // SAFETY: `src` is `#[repr(C)]` align 1, so the length prefix occupies
+        // bytes `[0, PFX)` and the active data `[PFX, PFX + len)`, all
+        // initialized and contiguous. `len()` is clamped to `N`, so
+        // `__init_len <= size_of::<Self>()`.
+        let __init =
+            unsafe { core::slice::from_raw_parts(src as *const Self as *const u8, __init_len) };
+        __writer.write(__init)?;
+        write_zeroed_padding(__writer.by_ref(), core::mem::size_of::<Self>() - __init_len)?;
         Ok(())
     }
 }
@@ -72,13 +103,18 @@ unsafe impl<T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore> wincode:
         mut __writer: impl wincode::io::Writer,
         src: &Self,
     ) -> wincode::error::WriteResult<()> {
-        let __bytes = unsafe {
-            core::slice::from_raw_parts(
-                src as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
-        };
-        __writer.write(__bytes)?;
+        // Initialized region is the PFX-byte length prefix followed by the
+        // first `len` elements. `T: ZcElem` is align 1, so elements are packed
+        // with no padding and sit contiguously after the prefix.
+        let __init_len = PFX + src.len() * core::mem::size_of::<T>();
+        // SAFETY: `src` is `#[repr(C)]` align 1; the prefix occupies `[0, PFX)`
+        // and the active elements `[PFX, PFX + len * size_of::<T>())`, all
+        // initialized and contiguous. `len()` is clamped to `N`, so
+        // `__init_len <= size_of::<Self>()`.
+        let __init =
+            unsafe { core::slice::from_raw_parts(src as *const Self as *const u8, __init_len) };
+        __writer.write(__init)?;
+        write_zeroed_padding(__writer.by_ref(), core::mem::size_of::<Self>() - __init_len)?;
         Ok(())
     }
 }
