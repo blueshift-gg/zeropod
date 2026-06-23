@@ -6,8 +6,15 @@
 use {
     super::{option::PodOption, string::PodString, vec::PodVec},
     crate::traits::ZcElem,
-    wincode::config::ConfigCore,
+    wincode::{config::ConfigCore, TypeMeta},
 };
+
+const fn static_zero_copy<T>() -> TypeMeta {
+    TypeMeta::Static {
+        size: core::mem::size_of::<T>(),
+        zero_copy: true,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // PodString
@@ -17,6 +24,8 @@ unsafe impl<const N: usize, const PFX: usize, C: ConfigCore> wincode::SchemaWrit
     for PodString<N, PFX>
 {
     type Src = Self;
+
+    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
 
     fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
         Ok(core::mem::size_of::<Self>())
@@ -42,6 +51,8 @@ unsafe impl<'__de, const N: usize, const PFX: usize, C: ConfigCore> wincode::Sch
 {
     type Dst = Self;
 
+    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
+
     fn read(
         mut __reader: impl wincode::io::Reader<'__de>,
         __dst: &mut core::mem::MaybeUninit<Self>,
@@ -55,6 +66,11 @@ unsafe impl<'__de, const N: usize, const PFX: usize, C: ConfigCore> wincode::Sch
     }
 }
 
+unsafe impl<const N: usize, const PFX: usize, C: ConfigCore> wincode::config::ZeroCopy<C>
+    for PodString<N, PFX>
+{
+}
+
 // ---------------------------------------------------------------------------
 // PodVec
 // ---------------------------------------------------------------------------
@@ -63,6 +79,8 @@ unsafe impl<T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore> wincode:
     for PodVec<T, N, PFX>
 {
     type Src = Self;
+
+    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
 
     fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
         Ok(core::mem::size_of::<Self>())
@@ -88,6 +106,8 @@ unsafe impl<'__de, T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore>
 {
     type Dst = Self;
 
+    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
+
     fn read(
         mut __reader: impl wincode::io::Reader<'__de>,
         __dst: &mut core::mem::MaybeUninit<Self>,
@@ -101,6 +121,11 @@ unsafe impl<'__de, T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore>
     }
 }
 
+unsafe impl<T: ZcElem + 'static, const N: usize, const PFX: usize, C: ConfigCore>
+    wincode::config::ZeroCopy<C> for PodVec<T, N, PFX>
+{
+}
+
 // ---------------------------------------------------------------------------
 // PodOption
 // ---------------------------------------------------------------------------
@@ -109,6 +134,8 @@ unsafe impl<T: Copy, const PFX: usize, C: ConfigCore> wincode::SchemaWrite<C>
     for PodOption<T, PFX>
 {
     type Src = Self;
+
+    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
 
     fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
         Ok(core::mem::size_of::<Self>())
@@ -134,6 +161,8 @@ unsafe impl<'__de, T: ZcElem, const PFX: usize, C: ConfigCore> wincode::SchemaRe
 {
     type Dst = Self;
 
+    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
+
     fn read(
         mut __reader: impl wincode::io::Reader<'__de>,
         __dst: &mut core::mem::MaybeUninit<Self>,
@@ -145,4 +174,9 @@ unsafe impl<'__de, T: ZcElem, const PFX: usize, C: ConfigCore> wincode::SchemaRe
         __dst.write(__val);
         Ok(())
     }
+}
+
+unsafe impl<T: ZcElem + 'static, const PFX: usize, C: ConfigCore> wincode::config::ZeroCopy<C>
+    for PodOption<T, PFX>
+{
 }

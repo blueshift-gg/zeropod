@@ -1,5 +1,16 @@
 use zeropod::pod::*;
 
+#[cfg(feature = "wincode")]
+fn assert_zero_copy<T: wincode::ZeroCopy>() {}
+
+#[cfg(feature = "wincode")]
+#[test]
+fn requested_pod_containers_are_zero_copy() {
+    assert_zero_copy::<PodString<32>>();
+    assert_zero_copy::<PodVec<u8, 10>>();
+    assert_zero_copy::<PodOption<u8>>();
+}
+
 // ---- PodOption tests ----
 
 #[test]
