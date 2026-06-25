@@ -123,6 +123,14 @@ fn pod_u64_roundtrip() {
 }
 
 #[test]
+fn pod_u32_new_from_array() {
+    let pod = PodU32::new_from_array([0x78, 0x56, 0x34, 0x12]);
+
+    assert_eq!(pod.get(), 0x1234_5678);
+    assert_eq!(pod, PodU32::from(0x1234_5678));
+}
+
+#[test]
 fn pod_u64_arithmetic() {
     let a = PodU64::from(100u64);
     let b = PodU64::from(42u64);
