@@ -51,6 +51,11 @@ macro_rules! define_pod_common {
             pub const MIN: Self = Self(<$native>::MIN.to_le_bytes());
 
             #[inline(always)]
+            pub const fn new_from_array(array: [u8; $size]) -> Self {
+                Self(array)
+            }
+
+            #[inline(always)]
             pub fn get(&self) -> $native {
                 <$native>::from_le_bytes(self.0)
             }
