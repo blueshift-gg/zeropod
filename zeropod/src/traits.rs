@@ -177,6 +177,19 @@ unsafe impl<const N: usize> ZcElem for [u8; N] {}
 // T: ZcElem guarantees T is align 1, so PodOption<T, PFX> is also align 1.
 unsafe impl<T: ZcElem, const PFX: usize> ZcElem for PodOption<T, PFX> {}
 
+// SAFETY: PodString<N, PFX> is #[repr(C)] over [u8; PFX] + [MaybeUninit<u8>; N],
+// both align 1 with no padding. Every initialized bit pattern is a valid
+// reference (raw bytes, no restricted-domain fields); validate_ref gates
+// len <= N and UTF-8 of the active bytes.
+unsafe impl<const N: usize, const PFX: usize> ZcElem for PodString<N, PFX> {}
+
+// SAFETY: PodVec<T: ZcElem, N, PFX> is #[repr(C)] over [u8; PFX] +
+// [MaybeUninit<T>; N]. T: ZcElem guarantees T is align 1, so the struct is
+// align 1 with no padding. Every initialized bit pattern is a valid reference
+// (T's own validity holds for any bit pattern); validate_ref gates len <= N
+// and recurses into each element.
+unsafe impl<T: ZcElem, const N: usize, const PFX: usize> ZcElem for PodVec<T, N, PFX> {}
+
 // --- Feature-gated impls for external types ---
 
 #[cfg(feature = "solana-address")]
