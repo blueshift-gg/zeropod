@@ -225,6 +225,14 @@ fn pod_string_push_str() {
     assert!(!s.push_str("ld")); // would exceed capacity
 }
 
+#[test]
+fn pod_string_try_from() {
+    let s = "hello";
+    let pod_s: PodString<6> = PodString::try_from(s).unwrap();
+    assert_eq!(s, pod_s.as_str());
+    assert!(PodString::<4>::try_from(s).is_err());
+}
+
 // ---- PodVec basic operations ----
 
 #[test]

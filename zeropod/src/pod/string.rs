@@ -269,6 +269,16 @@ impl<const N: usize, const PFX: usize> core::hash::Hash for PodString<N, PFX> {
     }
 }
 
+impl<const N: usize, const PFX: usize> TryFrom<&str> for PodString<N, PFX> {
+    type Error = ZeroPodError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let mut pod_str = PodString::default();
+        pod_str.try_push_str(value)?;
+        Ok(pod_str)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Kani model-checking proof harnesses
 // ---------------------------------------------------------------------------
