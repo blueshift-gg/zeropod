@@ -404,6 +404,24 @@ fn pod_bool_set() {
 }
 
 #[test]
+fn pod_numeric_as_ref_u8() {
+    let v = PodU32::from(0x1234_5678u32);
+    assert_eq!(v.as_ref(), &[0x78, 0x56, 0x34, 0x12]);
+
+    let v = PodU64::from(0x0102_0304_0506_0708u64);
+    assert_eq!(v.as_ref(), &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
+
+    let v = PodI16::from(-1i16);
+    assert_eq!(v.as_ref(), &[0xff, 0xff]);
+}
+
+#[test]
+fn pod_bool_as_ref_u8() {
+    assert_eq!(PodBool::from(true).as_ref(), &[1]);
+    assert_eq!(PodBool::from(false).as_ref(), &[0]);
+}
+
+#[test]
 fn pod_string_try_set() {
     let mut s = PodString::<4>::default();
     assert!(s.try_set("hi").is_ok());

@@ -237,6 +237,13 @@ macro_rules! define_pod_common {
                 fmt::Debug::fmt(&self.get(), f)
             }
         }
+
+        impl AsRef<[u8]> for $name {
+            #[inline(always)]
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
     };
 }
 
