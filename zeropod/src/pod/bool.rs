@@ -103,6 +103,13 @@ impl fmt::Debug for PodBool {
     }
 }
 
+impl AsRef<[u8]> for PodBool {
+    #[inline(always)]
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 const _: () = assert!(core::mem::align_of::<PodBool>() == 1);
 const _: () = assert!(core::mem::size_of::<PodBool>() == 1);
 
