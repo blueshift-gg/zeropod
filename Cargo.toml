@@ -1,3 +1,12 @@
 [workspace]
 members = ["zeropod", "zeropod-derive"]
 resolver = "2"
+
+[workspace.package]
+version = "0.3.4"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/blueshift-gg/zeropod"
+
+[workspace.dependencies]
+zeropod-derive = { version = "=0.3.4", path = "zeropod-derive" }

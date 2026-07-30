@@ -1,9 +1,9 @@
 [package]
 name = "zeropod-derive"
-version = "0.3.3"
-edition = "2021"
-license = "Apache-2.0"
-repository = "https://github.com/blueshift-gg/zeropod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Derive macros for zeropod"
 
 [lib]

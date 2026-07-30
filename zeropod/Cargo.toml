@@ -1,9 +1,9 @@
 [package]
 name = "zeropod"
-version = "0.3.3"
-edition = "2021"
-license = "Apache-2.0"
-repository = "https://github.com/blueshift-gg/zeropod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Zero-copy pod types with derive macros. Alignment-1 representations for zero-overhead data access."
 
 [features]
@@ -17,7 +17,7 @@ solana-program-error = ["dep:solana-program-error"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [dependencies]
-zeropod-derive = { version = "=0.3.3", path = "../zeropod-derive" }
+zeropod-derive = { workspace = true }
 wincode = { version = "0.5.5", default-features = false, features = [
     "derive",
 ], optional = true }

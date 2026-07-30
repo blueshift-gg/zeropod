@@ -148,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "zeropod"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "solana-address",
  "solana-program-error",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "zeropod-derive"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "proc-macro2",
  "quote",
