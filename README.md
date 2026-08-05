@@ -8,7 +8,7 @@ zeropod lets you read and write on-chain data through direct pointer casts — n
 
 ```toml
 [dependencies]
-zeropod = "0.1"
+zeropod = "0.3"
 ```
 
 ## Pod Types
