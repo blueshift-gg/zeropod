@@ -44,7 +44,10 @@ jobs:
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo release --unpublished --workspace --no-tag --no-push --execute --no-confirm
+        # actions/checkout leaves a detached HEAD when triggered by a tag push;
+        # cargo-release's default allow-branch is ["*", "!HEAD"], so allow HEAD
+        # explicitly (we publish the exact tagged commit; no tag/push happens here).
+        run: cargo release --unpublished --workspace --no-tag --no-push --execute --no-confirm --allow-branch '*,HEAD'
 
       - name: Create release
         env:
