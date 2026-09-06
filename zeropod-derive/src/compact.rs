@@ -1287,10 +1287,11 @@ fn compute_offset_tokens(
                 presence: TailPresence::Always,
                 payload: TailPayload::Vec { elem, .. },
             }) => {
+                let count_name = format_ident!("__{}_offset_count", f.name);
                 let mapped_elem = map_to_pod_type(elem);
                 steps.push(quote! {
-                    let __count = #read_len;
-                    __offset += __count * core::mem::size_of::<#mapped_elem>();
+                    let #count_name = #read_len;
+                    __offset += #count_name * core::mem::size_of::<#mapped_elem>();
                 });
             }
             FieldKind::Tail(TailField::Segment {
