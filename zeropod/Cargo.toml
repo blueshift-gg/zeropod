@@ -21,7 +21,7 @@ zeropod-derive = { workspace = true }
 wincode = { version = "0.5.5", default-features = false, features = [
     "derive",
 ], optional = true }
-solana-address = { version = ">= 2.2, <2.7", optional = true, features = [
+solana-address = { version = ">= 2.2, <2.8", optional = true, features = [
     "copy",
 ] }
 solana-program-error = { version = ">=1.0, <4.0", optional = true }
