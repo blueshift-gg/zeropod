@@ -3,7 +3,10 @@
 //! the new value clobbered the source bytes of later unedited tail fields
 //! before they were relocated.
 
-use zeropod::{ZeroPod, ZeroPodError};
+use zeropod::{
+    pod::{PodU16, PodU64},
+    ZeroPod, ZeroPodError,
+};
 
 #[allow(dead_code)]
 #[derive(ZeroPod)]
@@ -224,4 +227,32 @@ fn compact_mut_mixed_grow_and_shrink_preserves_unedited_last() {
         assert_eq!(view.b(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         assert_eq!(view.c(), &[9, 8, 7, 6, 5]);
     }
+}
+
+#[allow(dead_code)]
+#[derive(ZeroPod)]
+#[zeropod(compact)]
+struct MultiVecTail {
+    pub values: zeropod::Vec<u64, 8>,
+    pub codes: zeropod::Vec<u16, 8>,
+}
+
+#[test]
+fn compact_ref_uses_each_vec_tail_own_length() {
+    let mut buf = vec![0u8; 128];
+    let values = [PodU64::from(11), PodU64::from(22), PodU64::from(33)];
+    let codes = [PodU16::from(5), PodU16::from(8)];
+
+    let encoded_size = {
+        let mut value = MultiVecTailMut::new(&mut buf).unwrap();
+        value.set_values(&values).unwrap();
+        value.set_codes(&codes).unwrap();
+        value.commit().unwrap()
+    };
+
+    let value = MultiVecTailRef::new(&buf[..encoded_size]).unwrap();
+    assert_eq!(value.values().len(), values.len());
+    assert_eq!(value.values(), values);
+    assert_eq!(value.codes().len(), codes.len());
+    assert_eq!(value.codes(), codes);
 }
