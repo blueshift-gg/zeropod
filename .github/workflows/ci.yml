@@ -71,8 +71,9 @@ jobs:
             flags: -Zmiri-strict-provenance -Zmiri-tree-borrows
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly-2026-03-27
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-03-27
           components: miri, rust-src
       - uses: taiki-e/install-action@v2
         with:
@@ -113,7 +114,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly-2026-03-27
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-27
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz@0.13.2
