@@ -1,14 +1,11 @@
 use zeropod::pod::*;
 
 #[cfg(feature = "wincode")]
-fn assert_zero_copy<T: wincode::ZeroCopy>() {}
-
-#[cfg(feature = "wincode")]
 #[test]
-fn requested_pod_containers_are_zero_copy() {
-    assert_zero_copy::<PodString<32>>();
-    assert_zero_copy::<PodVec<u8, 10>>();
-    assert_zero_copy::<PodOption<u8>>();
+fn nested_wincode_values_are_validated() {
+    assert!(wincode::deserialize::<[PodString<1>; 1]>(&[1, 255]).is_err());
+    assert!(wincode::deserialize::<[PodVec<PodBool, 1>; 1]>(&[1, 0, 2]).is_err());
+    assert!(wincode::deserialize::<[PodOption<PodBool>; 1]>(&[1, 2]).is_err());
 }
 
 // ---- PodOption tests ----

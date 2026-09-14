@@ -1,182 +1,54 @@
-//! Manual `SchemaWrite` / `SchemaRead` impls for pod types that cannot use
-//! derive (generic params, `MaybeUninit` fields).  Each impl serializes the
-//! full fixed-size byte representation via raw pointer cast — matching the
-//! zero-copy layout used on-chain.
-
 use {
-    super::{option::PodOption, string::PodString, vec::PodVec},
-    crate::traits::ZcElem,
+    super::{PodBool, PodOption, PodString, PodVec},
+    crate::ZcElem,
     wincode::{config::ConfigCore, TypeMeta},
 };
 
-const fn static_zero_copy<T>() -> TypeMeta {
-    TypeMeta::Static {
-        size: core::mem::size_of::<T>(),
-        zero_copy: true,
-    }
+macro_rules! storage_codec {
+    ($ty:ty, $error:literal; $($generics:tt)*) => {
+        // ZcElem guarantees an initialized, padding-free representation.
+        unsafe impl<$($generics)* C: ConfigCore> wincode::SchemaWrite<C> for $ty {
+            type Src = Self;
+            const TYPE_META: TypeMeta = TypeMeta::Static {
+                size: core::mem::size_of::<Self>(),
+                zero_copy: true,
+            };
+
+            fn size_of(_: &Self) -> wincode::error::WriteResult<usize> {
+                Ok(core::mem::size_of::<Self>())
+            }
+
+            fn write(mut writer: impl wincode::io::Writer, src: &Self) -> wincode::error::WriteResult<()> {
+                let bytes = unsafe {
+                    core::slice::from_raw_parts(src as *const Self as *const u8, core::mem::size_of::<Self>())
+                };
+                writer.write(bytes)?;
+                Ok(())
+            }
+        }
+
+        // Every initialized bit pattern is Rust-valid; semantic validation must
+        // run before publication, including when nested in another codec.
+        unsafe impl<'de, $($generics)* C: ConfigCore> wincode::SchemaRead<'de, C> for $ty {
+            type Dst = Self;
+            const TYPE_META: TypeMeta = TypeMeta::Static {
+                size: core::mem::size_of::<Self>(),
+                zero_copy: false,
+            };
+
+            fn read(mut reader: impl wincode::io::Reader<'de>, dst: &mut core::mem::MaybeUninit<Self>) -> wincode::error::ReadResult<()> {
+                let bytes = reader.take_scoped(core::mem::size_of::<Self>())?;
+                let value = unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) };
+                <Self as crate::ZcValidate>::validate_ref(&value)
+                    .map_err(|_| wincode::error::ReadError::InvalidValue($error))?;
+                dst.write(value);
+                Ok(())
+            }
+        }
+    };
 }
 
-// ---------------------------------------------------------------------------
-// PodString
-// ---------------------------------------------------------------------------
-
-unsafe impl<const N: usize, const PFX: usize, C: ConfigCore> wincode::SchemaWrite<C>
-    for PodString<N, PFX>
-{
-    type Src = Self;
-
-    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
-
-    fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
-        Ok(core::mem::size_of::<Self>())
-    }
-
-    fn write(
-        mut __writer: impl wincode::io::Writer,
-        src: &Self,
-    ) -> wincode::error::WriteResult<()> {
-        let __bytes = unsafe {
-            core::slice::from_raw_parts(
-                src as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
-        };
-        __writer.write(__bytes)?;
-        Ok(())
-    }
-}
-
-unsafe impl<'__de, const N: usize, const PFX: usize, C: ConfigCore> wincode::SchemaRead<'__de, C>
-    for PodString<N, PFX>
-{
-    type Dst = Self;
-
-    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
-
-    fn read(
-        mut __reader: impl wincode::io::Reader<'__de>,
-        __dst: &mut core::mem::MaybeUninit<Self>,
-    ) -> wincode::error::ReadResult<()> {
-        let __bytes = __reader.take_scoped(core::mem::size_of::<Self>())?;
-        let __val = unsafe { core::ptr::read_unaligned(__bytes.as_ptr() as *const Self) };
-        <Self as crate::ZcValidate>::validate_ref(&__val)
-            .map_err(|_| wincode::error::ReadError::InvalidValue("PodString validation failed"))?;
-        __dst.write(__val);
-        Ok(())
-    }
-}
-
-unsafe impl<const N: usize, const PFX: usize, C: ConfigCore> wincode::config::ZeroCopy<C>
-    for PodString<N, PFX>
-{
-}
-
-// ---------------------------------------------------------------------------
-// PodVec
-// ---------------------------------------------------------------------------
-
-unsafe impl<T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore> wincode::SchemaWrite<C>
-    for PodVec<T, N, PFX>
-{
-    type Src = Self;
-
-    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
-
-    fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
-        Ok(core::mem::size_of::<Self>())
-    }
-
-    fn write(
-        mut __writer: impl wincode::io::Writer,
-        src: &Self,
-    ) -> wincode::error::WriteResult<()> {
-        let __bytes = unsafe {
-            core::slice::from_raw_parts(
-                src as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
-        };
-        __writer.write(__bytes)?;
-        Ok(())
-    }
-}
-
-unsafe impl<'__de, T: ZcElem, const N: usize, const PFX: usize, C: ConfigCore>
-    wincode::SchemaRead<'__de, C> for PodVec<T, N, PFX>
-{
-    type Dst = Self;
-
-    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
-
-    fn read(
-        mut __reader: impl wincode::io::Reader<'__de>,
-        __dst: &mut core::mem::MaybeUninit<Self>,
-    ) -> wincode::error::ReadResult<()> {
-        let __bytes = __reader.take_scoped(core::mem::size_of::<Self>())?;
-        let __val = unsafe { core::ptr::read_unaligned(__bytes.as_ptr() as *const Self) };
-        <Self as crate::ZcValidate>::validate_ref(&__val)
-            .map_err(|_| wincode::error::ReadError::InvalidValue("PodVec validation failed"))?;
-        __dst.write(__val);
-        Ok(())
-    }
-}
-
-unsafe impl<T: ZcElem + 'static, const N: usize, const PFX: usize, C: ConfigCore>
-    wincode::config::ZeroCopy<C> for PodVec<T, N, PFX>
-{
-}
-
-// ---------------------------------------------------------------------------
-// PodOption
-// ---------------------------------------------------------------------------
-
-unsafe impl<T: Copy, const PFX: usize, C: ConfigCore> wincode::SchemaWrite<C>
-    for PodOption<T, PFX>
-{
-    type Src = Self;
-
-    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
-
-    fn size_of(_src: &Self) -> wincode::error::WriteResult<usize> {
-        Ok(core::mem::size_of::<Self>())
-    }
-
-    fn write(
-        mut __writer: impl wincode::io::Writer,
-        src: &Self,
-    ) -> wincode::error::WriteResult<()> {
-        let __bytes = unsafe {
-            core::slice::from_raw_parts(
-                src as *const Self as *const u8,
-                core::mem::size_of::<Self>(),
-            )
-        };
-        __writer.write(__bytes)?;
-        Ok(())
-    }
-}
-
-unsafe impl<'__de, T: ZcElem, const PFX: usize, C: ConfigCore> wincode::SchemaRead<'__de, C>
-    for PodOption<T, PFX>
-{
-    type Dst = Self;
-
-    const TYPE_META: TypeMeta = static_zero_copy::<Self>();
-
-    fn read(
-        mut __reader: impl wincode::io::Reader<'__de>,
-        __dst: &mut core::mem::MaybeUninit<Self>,
-    ) -> wincode::error::ReadResult<()> {
-        let __bytes = __reader.take_scoped(core::mem::size_of::<Self>())?;
-        let __val = unsafe { core::ptr::read_unaligned(__bytes.as_ptr() as *const Self) };
-        <Self as crate::ZcValidate>::validate_ref(&__val)
-            .map_err(|_| wincode::error::ReadError::InvalidValue("PodOption validation failed"))?;
-        __dst.write(__val);
-        Ok(())
-    }
-}
-
-unsafe impl<T: ZcElem + 'static, const PFX: usize, C: ConfigCore> wincode::config::ZeroCopy<C>
-    for PodOption<T, PFX>
-{
-}
+storage_codec!(PodBool, "PodBool validation failed";);
+storage_codec!(PodString<N, PFX>, "PodString validation failed"; const N: usize, const PFX: usize,);
+storage_codec!(PodVec<T, N, PFX>, "PodVec validation failed"; T: ZcElem, const N: usize, const PFX: usize,);
+storage_codec!(PodOption<T, PFX>, "PodOption validation failed"; T: ZcElem, const PFX: usize,);

@@ -21,7 +21,7 @@ enum VariantPayload {
     },
     Compact {
         ty: Type,
-        ref_ty: syn::Ident,
+        ref_ty: syn::Path,
     },
 }
 
@@ -122,10 +122,30 @@ pub fn generate(input: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    let layout_checks = parsed.iter().filter_map(|variant| match &variant.payload {
+        VariantPayload::Vec { elem, max, pfx } => {
+            let elem = map_to_pod_type(elem);
+            Some(quote! { let _ = zeropod::pod::PodVec::<#elem, #max, #pfx>::VALID; })
+        }
+        VariantPayload::String { max, pfx } => Some(quote! {
+            let _ = zeropod::pod::PodString::<#max, #pfx>::VALID;
+        }),
+        VariantPayload::Fixed { ty } => Some(quote! {
+            let _ = __require_element::<<#ty as zeropod::ZeroPodFixed>::Zc>;
+            assert!(<#ty as zeropod::ZeroPodFixed>::SIZE == core::mem::size_of::<<#ty as zeropod::ZeroPodFixed>::Zc>());
+        }),
+        _ => None,
+    });
+
     let read_tag = read_tag_expr(tag_size, quote! { data });
     let mut_impl = generate_mut_impl(enum_name, &mut_name, &parsed, tag_size, &native_ty);
 
     quote! {
+        const _: () = {
+            fn __require_element<T: zeropod::ZcElem>() {}
+            #( #layout_checks )*
+        };
+
         #[repr(C)]
         #[derive(Clone, Copy)]
         pub struct #header_name {
@@ -193,6 +213,7 @@ fn generate_mut_impl(
     let mut projected_arms = Vec::new();
     let mut commit_arms = Vec::new();
     let edit_enum = format_ident!("__{}Edit", enum_name);
+    let state_name = format_ident!("__{}State", mut_name);
 
     for variant in variants {
         let name = variant.name;
@@ -205,7 +226,7 @@ fn generate_mut_impl(
                 edit_variants.push(quote! { #edit_name });
                 setters.push(quote! {
                     pub fn #setter_name(&mut self) -> Result<(), zeropod::ZeroPodError> {
-                        self.edit = Some(#edit_enum::#edit_name);
+                        unsafe { self.state.get_mut() }.edit = Some(#edit_enum::#edit_name);
                         Ok(())
                     }
                 });
@@ -214,7 +235,7 @@ fn generate_mut_impl(
                 });
                 commit_arms.push(quote! {
                     #edit_enum::#edit_name => {
-                        write_tag(self.data, (#disc as #native_ty));
+                        write_tag(state.data, (#disc as #native_ty));
                     }
                 });
             }
@@ -225,7 +246,7 @@ fn generate_mut_impl(
                         if value.len() > #max {
                             return Err(zeropod::ZeroPodError::Overflow);
                         }
-                        self.edit = Some(#edit_enum::#edit_name {
+                        unsafe { self.state.get_mut() }.edit = Some(#edit_enum::#edit_name {
                             ptr: value.as_ptr(),
                             len: value.len(),
                         });
@@ -237,13 +258,13 @@ fn generate_mut_impl(
                 });
                 commit_arms.push(quote! {
                     #edit_enum::#edit_name { ptr, len } => {
-                        write_tag(self.data, (#disc as #native_ty));
-                        write_len(self.data, #tag_size, #pfx, len);
+                        write_tag(state.data, (#disc as #native_ty));
+                        write_len(state.data, #tag_size, #pfx, len);
                         if len > 0 {
                             unsafe {
                                 core::ptr::copy_nonoverlapping(
                                     ptr,
-                                    self.data.as_mut_ptr().add(#tag_size + #pfx),
+                                    state.data.as_mut_ptr().add(#tag_size + #pfx),
                                     len,
                                 );
                             }
@@ -260,7 +281,7 @@ fn generate_mut_impl(
                         if value.len() > #max {
                             return Err(zeropod::ZeroPodError::Overflow);
                         }
-                        self.edit = Some(#edit_enum::#edit_name {
+                        unsafe { self.state.get_mut() }.edit = Some(#edit_enum::#edit_name {
                             ptr: value.as_ptr() as *const u8,
                             count: value.len(),
                             elem_size: core::mem::size_of::<#mapped_elem>(),
@@ -276,13 +297,13 @@ fn generate_mut_impl(
                 commit_arms.push(quote! {
                     #edit_enum::#edit_name { ptr, count, elem_size } => {
                         let __byte_len = count * elem_size;
-                        write_tag(self.data, (#disc as #native_ty));
-                        write_len(self.data, #tag_size, #pfx, count);
+                        write_tag(state.data, (#disc as #native_ty));
+                        write_len(state.data, #tag_size, #pfx, count);
                         if __byte_len > 0 {
                             unsafe {
                                 core::ptr::copy_nonoverlapping(
                                     ptr,
-                                    self.data.as_mut_ptr().add(#tag_size + #pfx),
+                                    state.data.as_mut_ptr().add(#tag_size + #pfx),
                                     __byte_len,
                                 );
                             }
@@ -297,7 +318,7 @@ fn generate_mut_impl(
                         &mut self,
                         value: &'a <#ty as zeropod::ZeroPodFixed>::Zc,
                     ) -> Result<(), zeropod::ZeroPodError> {
-                        self.edit = Some(#edit_enum::#edit_name {
+                        unsafe { self.state.get_mut() }.edit = Some(#edit_enum::#edit_name {
                             ptr: value as *const <#ty as zeropod::ZeroPodFixed>::Zc as *const u8,
                         });
                         Ok(())
@@ -305,18 +326,18 @@ fn generate_mut_impl(
                 });
                 projected_arms.push(quote! {
                     #edit_enum::#edit_name { .. } => {
-                        #tag_size + <#ty as zeropod::ZeroPodFixed>::SIZE
+                        #tag_size + core::mem::size_of::<<#ty as zeropod::ZeroPodFixed>::Zc>()
                     }
                 });
                 commit_arms.push(quote! {
                     #edit_enum::#edit_name { ptr } => {
-                        let __byte_len = <#ty as zeropod::ZeroPodFixed>::SIZE;
-                        write_tag(self.data, (#disc as #native_ty));
+                        let __byte_len = core::mem::size_of::<<#ty as zeropod::ZeroPodFixed>::Zc>();
+                        write_tag(state.data, (#disc as #native_ty));
                         if __byte_len > 0 {
                             unsafe {
                                 core::ptr::copy_nonoverlapping(
                                     ptr,
-                                    self.data.as_mut_ptr().add(#tag_size),
+                                    state.data.as_mut_ptr().add(#tag_size),
                                     __byte_len,
                                 );
                             }
@@ -329,7 +350,7 @@ fn generate_mut_impl(
                 setters.push(quote! {
                     pub fn #setter_name(&mut self, value: &'a [u8]) -> Result<(), zeropod::ZeroPodError> {
                         <#ty as zeropod::ZeroPodCompact>::validate(value)?;
-                        self.edit = Some(#edit_enum::#edit_name {
+                        unsafe { self.state.get_mut() }.edit = Some(#edit_enum::#edit_name {
                             ptr: value.as_ptr(),
                             len: value.len(),
                         });
@@ -341,12 +362,12 @@ fn generate_mut_impl(
                 });
                 commit_arms.push(quote! {
                     #edit_enum::#edit_name { ptr, len } => {
-                        write_tag(self.data, (#disc as #native_ty));
+                        write_tag(state.data, (#disc as #native_ty));
                         if len > 0 {
                             unsafe {
                                 core::ptr::copy_nonoverlapping(
                                     ptr,
-                                    self.data.as_mut_ptr().add(#tag_size),
+                                    state.data.as_mut_ptr().add(#tag_size),
                                     len,
                                 );
                             }
@@ -368,6 +389,10 @@ fn generate_mut_impl(
         }
 
         pub struct #mut_name<'a> {
+            state: zeropod::view_state::ViewState<#enum_name, #state_name<'a>>,
+        }
+
+        struct #state_name<'a> {
             data: &'a mut [u8],
             edit: Option<#edit_enum<'a>>,
         }
@@ -375,34 +400,35 @@ fn generate_mut_impl(
         impl<'a> #mut_name<'a> {
             pub fn new(data: &'a mut [u8]) -> Result<Self, zeropod::ZeroPodError> {
                 <#enum_name as zeropod::ZeroPodCompact>::validate(data)?;
-                Ok(Self { data, edit: None })
+                Ok(unsafe { Self::new_unchecked(data) })
             }
 
             /// # Safety
             /// Caller must ensure `data` contains a valid compact enum value.
             pub unsafe fn new_unchecked(data: &'a mut [u8]) -> Self {
-                Self { data, edit: None }
+                Self { state: zeropod::view_state::ViewState::new(#state_name { data, edit: None }) }
             }
 
             #( #setters )*
 
             pub fn projected_size(&self) -> usize {
-                match self.edit.as_ref() {
+                match self.state.edit.as_ref() {
                     Some(edit) => match edit {
                         #( #projected_arms, )*
                         #edit_enum::__Lifetime(_) => unreachable!(),
                     },
-                    None => self.data.len(),
+                    None => self.state.data.len(),
                 }
             }
 
             pub fn commit(&mut self) -> Result<usize, zeropod::ZeroPodError> {
                 let __new_size = self.projected_size();
-                if __new_size > self.data.len() {
+                if __new_size > self.state.data.len() {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
                 }
 
-                if let Some(edit) = self.edit.take() {
+                let state = unsafe { self.state.get_mut() };
+                if let Some(edit) = state.edit.take() {
                     #write_tag
                     #write_len
                     match edit {
@@ -459,7 +485,8 @@ fn validate_payload_tokens(payload: &VariantPayload, tag_size: usize) -> TokenSt
     match payload {
         VariantPayload::Unit => quote! { Ok(()) },
         VariantPayload::String { max, pfx } => {
-            let read_len = read_len_at_expr(quote! { data }, quote! { #tag_size }, *pfx);
+            let read_len =
+                crate::compact::read_length(quote! { data }, quote! { #tag_size }, *pfx, true);
             quote! {
                 if data.len() < #tag_size + #pfx {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
@@ -469,7 +496,7 @@ fn validate_payload_tokens(payload: &VariantPayload, tag_size: usize) -> TokenSt
                     return Err(zeropod::ZeroPodError::InvalidLength);
                 }
                 let __payload_offset = #tag_size + #pfx;
-                if data.len() < __payload_offset + __byte_len {
+                if __byte_len > data.len() - __payload_offset {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
                 }
                 if core::str::from_utf8(&data[__payload_offset..__payload_offset + __byte_len]).is_err() {
@@ -480,7 +507,8 @@ fn validate_payload_tokens(payload: &VariantPayload, tag_size: usize) -> TokenSt
         }
         VariantPayload::Vec { elem, max, pfx } => {
             let mapped_elem = map_to_pod_type(elem);
-            let read_len = read_len_at_expr(quote! { data }, quote! { #tag_size }, *pfx);
+            let read_len =
+                crate::compact::read_length(quote! { data }, quote! { #tag_size }, *pfx, true);
             quote! {
                 if data.len() < #tag_size + #pfx {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
@@ -491,8 +519,8 @@ fn validate_payload_tokens(payload: &VariantPayload, tag_size: usize) -> TokenSt
                 }
                 let __payload_offset = #tag_size + #pfx;
                 let __elem_size = core::mem::size_of::<#mapped_elem>();
-                let __byte_len = __count * __elem_size;
-                if data.len() < __payload_offset + __byte_len {
+                let __byte_len = __count.checked_mul(__elem_size).ok_or(zeropod::ZeroPodError::BufferTooSmall)?;
+                if __byte_len > data.len() - __payload_offset {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
                 }
                 for __i in 0..__count {
@@ -526,7 +554,8 @@ fn construct_ref_tokens(
     match payload {
         VariantPayload::Unit => quote! { Ok(Self::#name) },
         VariantPayload::String { pfx, .. } => {
-            let read_len = read_len_at_expr(quote! { data }, quote! { #tag_size }, *pfx);
+            let read_len =
+                crate::compact::read_length(quote! { data }, quote! { #tag_size }, *pfx, false);
             quote! {
                 let __byte_len = #read_len;
                 let __payload_offset = #tag_size + #pfx;
@@ -536,7 +565,8 @@ fn construct_ref_tokens(
         }
         VariantPayload::Vec { elem, pfx, .. } => {
             let mapped_elem = map_to_pod_type(elem);
-            let read_len = read_len_at_expr(quote! { data }, quote! { #tag_size }, *pfx);
+            let read_len =
+                crate::compact::read_length(quote! { data }, quote! { #tag_size }, *pfx, false);
             quote! {
                 let __count = #read_len;
                 let __payload_offset = #tag_size + #pfx;
@@ -565,34 +595,6 @@ fn read_tag_expr(tag_size: usize, data: TokenStream) -> TokenStream {
             ])
         },
         _ => unreachable!("invalid repr size"),
-    }
-}
-
-fn read_len_at_expr(data: TokenStream, offset: TokenStream, pfx: usize) -> TokenStream {
-    match pfx {
-        1 => quote! { #data[#offset] as usize },
-        2 => quote! { u16::from_le_bytes([#data[#offset], #data[#offset + 1]]) as usize },
-        4 => quote! {
-            u32::from_le_bytes([
-                #data[#offset],
-                #data[#offset + 1],
-                #data[#offset + 2],
-                #data[#offset + 3],
-            ]) as usize
-        },
-        8 => quote! {
-            u64::from_le_bytes([
-                #data[#offset],
-                #data[#offset + 1],
-                #data[#offset + 2],
-                #data[#offset + 3],
-                #data[#offset + 4],
-                #data[#offset + 5],
-                #data[#offset + 6],
-                #data[#offset + 7],
-            ]) as usize
-        },
-        _ => unreachable!("invalid prefix size"),
     }
 }
 
@@ -637,13 +639,14 @@ fn to_snake_case(value: &str) -> String {
     out
 }
 
-fn compact_ref_ident(ty: &Type) -> Option<syn::Ident> {
-    let path = match ty {
-        Type::Path(path) => &path.path,
+fn compact_ref_ident(ty: &Type) -> Option<syn::Path> {
+    let mut path = match ty {
+        Type::Path(path) => path.path.clone(),
         _ => return None,
     };
-    let ident = &path.segments.last()?.ident;
-    Some(format_ident!("{}Ref", ident))
+    let segment = path.segments.last_mut()?;
+    segment.ident = format_ident!("{}Ref", segment.ident);
+    Some(path)
 }
 
 fn has_compact_attr(attrs: &[syn::Attribute]) -> bool {

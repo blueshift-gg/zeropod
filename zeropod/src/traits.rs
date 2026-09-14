@@ -54,9 +54,7 @@ impl<const N: usize> ZcValidate for [u8; N] {
 impl ZcValidate for PodBool {
     #[inline(always)]
     fn validate_ref(value: &Self) -> Result<(), ZeroPodError> {
-        // SAFETY: PodBool is #[repr(transparent)] over [u8; 1], alignment 1.
-        // Dereferencing as *const u8 reads the single stored byte.
-        let byte = unsafe { *(value as *const PodBool as *const u8) };
+        let byte = value.as_ref()[0];
         if byte > 1 {
             Err(ZeroPodError::InvalidBool)
         } else {
@@ -70,15 +68,16 @@ impl ZcValidate for PodBool {
 impl<const N: usize, const PFX: usize> ZcValidate for PodString<N, PFX> {
     #[inline(always)]
     fn validate_ref(value: &Self) -> Result<(), ZeroPodError> {
-        let raw_len = value.decode_len();
-        if raw_len > N {
+        let raw_len = value.raw_len();
+        if raw_len > N as u64 {
             return Err(ZeroPodError::InvalidLength);
         }
         // SAFETY: raw_len <= N, and data is a [MaybeUninit<u8>; N] array.
         // The bytes come from account data (initialized memory), not
         // MaybeUninit::uninit().
-        let bytes =
-            unsafe { core::slice::from_raw_parts(value.data.as_ptr() as *const u8, raw_len) };
+        let bytes = unsafe {
+            core::slice::from_raw_parts(value.data.as_ptr() as *const u8, raw_len as usize)
+        };
         if core::str::from_utf8(bytes).is_err() {
             return Err(ZeroPodError::InvalidUtf8);
         }
@@ -91,7 +90,7 @@ impl<const N: usize, const PFX: usize> ZcValidate for PodString<N, PFX> {
 impl<T: ZcElem, const N: usize, const PFX: usize> ZcValidate for PodVec<T, N, PFX> {
     #[inline(always)]
     fn validate_ref(value: &Self) -> Result<(), ZeroPodError> {
-        if value.decode_len() > N {
+        if value.raw_len() > N as u64 {
             return Err(ZeroPodError::InvalidLength);
         }
         for item in value.as_slice() {
@@ -121,7 +120,7 @@ impl<T: Copy + ZcValidate, const PFX: usize> ZcValidate for PodOption<T, PFX> {
 
 /// # Safety
 ///
-/// Implementors MUST guarantee all four of the following. Any violation
+/// Implementors MUST guarantee all of the following. Any violation
 /// makes the zero-copy pointer cast `&*(ptr as *const Self)` performed by
 /// the deserialization path undefined behavior.
 ///
@@ -150,6 +149,10 @@ impl<T: Copy + ZcValidate, const PFX: usize> ZcValidate for PodOption<T, PFX> {
 ///    with a restricted domain (`PodBool`, enums with fewer than `2^N`
 ///    discriminants, length-prefix-bearing containers), `validate_ref` is
 ///    the sole gate and MUST NOT short-circuit.
+///
+/// 5. **Initialized representation.** Every value produced by safe constructors
+///    and mutations must have initialized bytes throughout its representation,
+///    including inactive payload and spare capacity. Writers may copy all bytes.
 pub unsafe trait ZcElem: Copy + ZcValidate {}
 
 // SAFETY: u8 and i8 are single bytes, trivially align 1, all bit patterns
@@ -230,14 +233,16 @@ pub trait ZeroPodFixed: ZeroPodSchema {
     fn from_bytes_mut(data: &mut [u8]) -> Result<&mut Self::Zc, ZeroPodError>;
     fn validate(data: &[u8]) -> Result<(), ZeroPodError>;
     /// # Safety
-    /// Caller must ensure `data` is at least `Self::SIZE` bytes and contains
-    /// valid content.
+    /// `data` must contain an aligned, initialized, valid `Self::Zc` occupying
+    /// `size_of::<Self::Zc>()` bytes, including its safe-accessor invariants.
+    /// `Self::SIZE` alone does not establish these requirements.
     unsafe fn from_bytes_unchecked(data: &[u8]) -> &Self::Zc {
         &*(data.as_ptr() as *const Self::Zc)
     }
     /// # Safety
-    /// Caller must ensure `data` is at least `Self::SIZE` bytes and contains
-    /// valid content.
+    /// `data` must contain an aligned, initialized, valid `Self::Zc` occupying
+    /// `size_of::<Self::Zc>()` bytes, including its safe-accessor invariants.
+    /// Mutations must preserve the initialized byte representation of `data`.
     unsafe fn from_bytes_mut_unchecked(data: &mut [u8]) -> &mut Self::Zc {
         &mut *(data.as_mut_ptr() as *mut Self::Zc)
     }

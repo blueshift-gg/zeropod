@@ -39,18 +39,23 @@ impl<T: ZcElem, const N: usize, const PFX: usize> PodVec<T, N, PFX> {
     pub const VALID: () = Self::_CAP_CHECK;
 
     #[inline(always)]
-    pub fn decode_len(&self) -> usize {
+    pub(crate) fn raw_len(&self) -> u64 {
         #[allow(clippy::let_unit_value)]
         let _ = Self::_CAP_CHECK;
         match PFX {
-            1 => self.len[0] as usize,
-            2 => u16::from_le_bytes([self.len[0], self.len[1]]) as usize,
+            1 => self.len[0] as u64,
+            2 => u16::from_le_bytes([self.len[0], self.len[1]]) as u64,
             _ => {
                 let mut buf = [0u8; 8];
                 buf[..PFX].copy_from_slice(&self.len);
-                u64::from_le_bytes(buf) as usize
+                u64::from_le_bytes(buf)
             }
         }
+    }
+
+    #[inline(always)]
+    pub fn decode_len(&self) -> usize {
+        self.raw_len().min(usize::MAX as u64) as usize
     }
 
     #[inline(always)]
@@ -146,8 +151,7 @@ impl<T: ZcElem, const N: usize, const PFX: usize> PodVec<T, N, PFX> {
 
     pub fn try_extend_from_slice(&mut self, values: &[T]) -> Result<(), ZeroPodError> {
         let cur = self.len();
-        let new_len = cur + values.len();
-        if new_len > N {
+        if values.len() > N - cur {
             return Err(ZeroPodError::Overflow);
         }
         unsafe {
@@ -157,7 +161,7 @@ impl<T: ZcElem, const N: usize, const PFX: usize> PodVec<T, N, PFX> {
                 values.len(),
             );
         }
-        self.encode_len(new_len);
+        self.encode_len(cur + values.len());
         Ok(())
     }
 
@@ -215,11 +219,8 @@ impl<T: ZcElem, const N: usize, const PFX: usize> PodVec<T, N, PFX> {
         let tail = cur - index - 1;
         if tail > 0 {
             unsafe {
-                core::ptr::copy(
-                    self.data.as_ptr().add(index + 1),
-                    self.data.as_mut_ptr().add(index),
-                    tail,
-                );
+                let data = self.data.as_mut_ptr();
+                core::ptr::copy(data.add(index + 1), data.add(index), tail);
             }
         }
         self.encode_len(cur - 1);
@@ -262,9 +263,10 @@ impl<T: ZcElem, const N: usize, const PFX: usize> PodVec<T, N, PFX> {
 
 impl<T: ZcElem, const N: usize, const PFX: usize> Default for PodVec<T, N, PFX> {
     fn default() -> Self {
+        let () = Self::_CAP_CHECK;
         Self {
             len: [0u8; PFX],
-            data: [MaybeUninit::uninit(); N],
+            data: [MaybeUninit::zeroed(); N],
         }
     }
 }
