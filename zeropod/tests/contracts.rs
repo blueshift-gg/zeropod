@@ -496,16 +496,21 @@ fn contract_panicking_callback() {
     }
 }
 
-#[derive(ZeroPod)]
-#[zeropod(compact)]
-#[repr(u16)]
-enum Message {
-    Empty = 0,
-    Text(zeropod::String<4>) = 1,
-    Values(zeropod::Vec<u16, 2>) = 256,
+mod messages {
+    use zeropod::ZeroPod;
+
+    #[derive(ZeroPod)]
     #[zeropod(compact)]
-    Nested(self::Record) = 257,
+    #[repr(u16)]
+    pub enum Message {
+        Empty = 0,
+        Text(zeropod::String<4>) = 1,
+        Values(zeropod::Vec<u16, 2>) = 256,
+        #[zeropod(compact)]
+        Nested(super::Record) = 257,
+    }
 }
+use messages::{Message, MessageMut, MessageRef};
 
 pub fn check_enum(bytes: &mut [u8]) {
     match MessageRef::new(bytes) {
