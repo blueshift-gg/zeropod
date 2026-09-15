@@ -110,17 +110,17 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
     let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
     let capacity_checks = schema.tail_fields().map(|field| {
         // Optional tails have their own payload prefix, not PodOption's fixed layout.
-        match &field.kind {
-            FieldKind::Tail(tail) => match tail.payload() {
-                TailPayload::String { max, pfx } => {
-                    quote! { let _ = zeropod::pod::PodString::<#max, #pfx>::VALID; }
-                }
-                TailPayload::Vec { elem, max, pfx } => {
-                    let elem = map_to_pod_type(elem);
-                    quote! { let _ = zeropod::pod::PodVec::<#elem, #max, #pfx>::VALID; }
-                }
-            },
-            _ => unreachable!(),
+        let FieldKind::Tail(tail) = &field.kind else {
+            unreachable!()
+        };
+        match tail.payload() {
+            TailPayload::String { max, pfx } => {
+                quote! { let _ = zeropod::pod::PodString::<#max, #pfx>::VALID; }
+            }
+            TailPayload::Vec { elem, max, pfx } => {
+                let elem = map_to_pod_type(elem);
+                quote! { let _ = zeropod::pod::PodVec::<#elem, #max, #pfx>::VALID; }
+            }
         }
     });
     let mut tail_validations = Vec::new();
@@ -434,26 +434,10 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
     let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
     let tail_fields: Vec<_> = schema.tail_fields().collect();
 
-    // Edit descriptor fields.
-    let mut edit_fields = Vec::new();
-    for f in &tail_fields {
-        let edit_name = format_ident!("__{}_edit", f.name);
-        match &f.kind {
-            FieldKind::Tail(TailField::Segment {
-                payload: TailPayload::String { .. },
-                ..
-            }) => {
-                edit_fields.push(quote! { #edit_name: Option<(*const u8, usize)> });
-            }
-            FieldKind::Tail(TailField::Segment {
-                payload: TailPayload::Vec { .. },
-                ..
-            }) => {
-                edit_fields.push(quote! { #edit_name: Option<(*const u8, usize, usize)> });
-            }
-            _ => unreachable!(),
-        }
-    }
+    let edit_fields = tail_fields.iter().map(|field| {
+        let name = format_ident!("__{}_edit", field.name);
+        quote! { #name: Option<(*const u8, usize)> }
+    });
 
     let edit_inits: Vec<_> = tail_fields
         .iter()
@@ -498,7 +482,6 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                         unsafe { self.state.get_mut() }.#edit_name = Some((
                             value.as_ptr() as *const u8,
                             value.len(),
-                            core::mem::size_of::<#mapped_elem>(),
                         ));
                         Ok(())
                     }
@@ -536,10 +519,9 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                             unsafe { self.state.get_mut() }.#edit_name = Some((
                                 value.as_ptr() as *const u8,
                                 value.len(),
-                                core::mem::size_of::<#mapped_elem>(),
                             ));
                         } else {
-                            unsafe { self.state.get_mut() }.#edit_name = Some((core::ptr::null(), 0, core::mem::size_of::<#mapped_elem>()));
+                            unsafe { self.state.get_mut() }.#edit_name = Some((core::ptr::null(), 0));
                         }
                         Ok(())
                     }
@@ -578,8 +560,8 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                 let read_len = read_len_expr(&len_name, *pfx);
                 let mapped_elem = map_to_pod_type(elem);
                 proj_parts.push(quote! {
-                    if let Some((_, count, elem_size)) = self.state.#edit_name {
-                        count * elem_size
+                    if let Some((_, count)) = self.state.#edit_name {
+                        count * core::mem::size_of::<#mapped_elem>()
                     } else {
                         let __hdr = self.header();
                         let __count = #read_len;
@@ -617,8 +599,8 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                     &mapped_elem,
                 );
                 proj_parts.push(quote! {
-                    if let Some((ptr, count, elem_size)) = self.state.#edit_name {
-                        if ptr.is_null() { 0 } else { #pfx + count * elem_size }
+                    if let Some((ptr, count)) = self.state.#edit_name {
+                        if ptr.is_null() { 0 } else { #pfx + count * core::mem::size_of::<#mapped_elem>() }
                     } else {
                         let __hdr = self.header();
                         #offset_computation
@@ -772,7 +754,7 @@ fn generate_commit_body(
                         __count * core::mem::size_of::<#mapped_elem>()
                     };
                     let #new_len_var: usize = match self.state.#edit_name {
-                        Some((_, __count, __sz)) => __count * __sz,
+                        Some((_, __count)) => __count * core::mem::size_of::<#mapped_elem>(),
                         None => #old_len_var,
                     };
                 });
@@ -817,8 +799,8 @@ fn generate_commit_body(
                         #old_size
                     };
                     let #new_len_var: usize = match self.state.#edit_name {
-                        Some((ptr, __count, __sz)) => {
-                            if ptr.is_null() { 0 } else { #pfx + __count * __sz }
+                        Some((ptr, __count)) => {
+                            if ptr.is_null() { 0 } else { #pfx + __count * core::mem::size_of::<#mapped_elem>() }
                         }
                         None => #old_len_var,
                     };
@@ -882,161 +864,81 @@ fn generate_commit_body(
         });
     }
 
-    // Phase 2: write edited fields to their final positions.
+    // Write edits after every retained tail is in its final position.
     let mut phase_2 = Vec::new();
-    for f in tail_fields {
-        let fname = &f.name;
-        let edit_name = format_ident!("__{}_edit", fname);
-        let new_off_var = format_ident!("__new_off_{}", fname);
-        match &f.kind {
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::String { .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __new_byte_len)) = self.state.#edit_name {
-                        if __new_byte_len > 0 {
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __src_ptr,
-                                    __buf_ptr.add(#new_off_var),
-                                    __new_byte_len,
-                                );
-                            }
-                        }
-                    }
-                });
+    for field in tail_fields {
+        let edit = format_ident!("__{}_edit", field.name);
+        let offset = format_ident!("__new_off_{}", field.name);
+        let FieldKind::Tail(tail) = &field.kind else {
+            unreachable!()
+        };
+        let byte_len = match tail.payload() {
+            TailPayload::String { .. } => quote! { __count },
+            TailPayload::Vec { elem, .. } => {
+                let elem = map_to_pod_type(elem);
+                quote! { __count * core::mem::size_of::<#elem>() }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::Vec { .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __count, __elem_size)) = self.state.#edit_name {
-                        let __new_byte_len = __count * __elem_size;
-                        if __new_byte_len > 0 {
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __src_ptr,
-                                    __buf_ptr.add(#new_off_var),
-                                    __new_byte_len,
-                                );
-                            }
-                        }
-                    }
-                });
+        };
+        let copy = quote! {
+            let __byte_len = #byte_len;
+            if __byte_len > 0 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(__src_ptr, __dst_ptr, __byte_len);
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::String { pfx, .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __new_byte_len)) = self.state.#edit_name {
-                        if !__src_ptr.is_null() {
-                            let __bytes = (__new_byte_len as u64).to_le_bytes();
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __bytes.as_ptr(),
-                                    __buf_ptr.add(#new_off_var),
-                                    #pfx,
-                                );
-                                if __new_byte_len > 0 {
-                                    core::ptr::copy_nonoverlapping(
-                                        __src_ptr,
-                                        __buf_ptr.add(#new_off_var + #pfx),
-                                        __new_byte_len,
-                                    );
-                                }
-                            }
+        };
+        let write = match tail.presence() {
+            TailPresence::Always => quote! {
+                let __dst_ptr = unsafe { __buf_ptr.add(#offset) };
+                #copy
+            },
+            TailPresence::OptionTag => {
+                let pfx = tail.payload().pfx();
+                quote! {
+                    if !__src_ptr.is_null() {
+                        let __bytes = (__count as u64).to_le_bytes();
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(__bytes.as_ptr(), __buf_ptr.add(#offset), #pfx);
                         }
+                        let __dst_ptr = unsafe { __buf_ptr.add(#offset + #pfx) };
+                        #copy
                     }
-                });
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::Vec { pfx, .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __count, __elem_size)) = self.state.#edit_name {
-                        if !__src_ptr.is_null() {
-                            let __bytes = (__count as u64).to_le_bytes();
-                            let __new_byte_len = __count * __elem_size;
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __bytes.as_ptr(),
-                                    __buf_ptr.add(#new_off_var),
-                                    #pfx,
-                                );
-                                if __new_byte_len > 0 {
-                                    core::ptr::copy_nonoverlapping(
-                                        __src_ptr,
-                                        __buf_ptr.add(#new_off_var + #pfx),
-                                        __new_byte_len,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
+        };
+        phase_2.push(quote! {
+            if let Some((__src_ptr, __count)) = self.state.#edit {
+                #write
             }
-            _ => unreachable!(),
-        }
+        });
     }
 
-    // Update header length prefixes for edited fields.
     let mut update_lens = Vec::new();
-    for f in tail_fields {
-        let edit_name = format_ident!("__{}_edit", f.name);
-        let len_name = format_ident!("__{}_len", f.name);
-        let pfx_lit = tail_pfx(&f.kind);
-
-        match &f.kind {
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::String { .. },
-            }) => {
-                update_lens.push(quote! {
-                    if let Some((_, __new_byte_len)) = self.state.#edit_name {
-                        let __bytes = (__new_byte_len as u64).to_le_bytes();
-                        self.header_mut().#len_name[..#pfx_lit].copy_from_slice(&__bytes[..#pfx_lit]);
-                    }
-                });
-            }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::Vec { .. },
-            }) => {
-                update_lens.push(quote! {
-                    if let Some((_, __count, _)) = self.state.#edit_name {
+    for field in tail_fields {
+        let edit = format_ident!("__{}_edit", field.name);
+        let FieldKind::Tail(tail) = &field.kind else {
+            unreachable!()
+        };
+        update_lens.push(match tail.presence() {
+            TailPresence::Always => {
+                let len = format_ident!("__{}_len", field.name);
+                let pfx = tail.payload().pfx();
+                quote! {
+                    if let Some((_, __count)) = self.state.#edit {
                         let __bytes = (__count as u64).to_le_bytes();
-                        self.header_mut().#len_name[..#pfx_lit].copy_from_slice(&__bytes[..#pfx_lit]);
+                        self.header_mut().#len.copy_from_slice(&__bytes[..#pfx]);
                     }
-                });
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::String { .. },
-            }) => {
-                let tag_name = format_ident!("__{}_tag", f.name);
-                update_lens.push(quote! {
-                    if let Some((ptr, _)) = self.state.#edit_name {
-                        self.header_mut().#tag_name[0] = if ptr.is_null() { 0 } else { 1 };
+            TailPresence::OptionTag => {
+                let tag = format_ident!("__{}_tag", field.name);
+                quote! {
+                    if let Some((ptr, _)) = self.state.#edit {
+                        self.header_mut().#tag[0] = u8::from(!ptr.is_null());
                     }
-                });
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::Vec { .. },
-            }) => {
-                let tag_name = format_ident!("__{}_tag", f.name);
-                update_lens.push(quote! {
-                    if let Some((ptr, _, _)) = self.state.#edit_name {
-                        self.header_mut().#tag_name[0] = if ptr.is_null() { 0 } else { 1 };
-                    }
-                });
-            }
-            _ => unreachable!(),
-        }
+        });
     }
 
     let clear_edits: Vec<_> = tail_fields

@@ -274,8 +274,7 @@ fn generate_mut_impl(
             }
             VariantPayload::Vec { elem, max, pfx } => {
                 let mapped_elem = map_to_pod_type(elem);
-                edit_variants
-                    .push(quote! { #edit_name { ptr: *const u8, count: usize, elem_size: usize } });
+                edit_variants.push(quote! { #edit_name { ptr: *const u8, count: usize } });
                 setters.push(quote! {
                     pub fn #setter_name(&mut self, value: &'a [#mapped_elem]) -> Result<(), zeropod::ZeroPodError> {
                         if value.len() > #max {
@@ -284,19 +283,18 @@ fn generate_mut_impl(
                         unsafe { self.state.get_mut() }.edit = Some(#edit_enum::#edit_name {
                             ptr: value.as_ptr() as *const u8,
                             count: value.len(),
-                            elem_size: core::mem::size_of::<#mapped_elem>(),
                         });
                         Ok(())
                     }
                 });
                 projected_arms.push(quote! {
-                    #edit_enum::#edit_name { count, elem_size, .. } => {
-                        #tag_size + #pfx + count * elem_size
+                    #edit_enum::#edit_name { count, .. } => {
+                        #tag_size + #pfx + count * core::mem::size_of::<#mapped_elem>()
                     }
                 });
                 commit_arms.push(quote! {
-                    #edit_enum::#edit_name { ptr, count, elem_size } => {
-                        let __byte_len = count * elem_size;
+                    #edit_enum::#edit_name { ptr, count } => {
+                        let __byte_len = count * core::mem::size_of::<#mapped_elem>();
                         write_tag(state.data, (#disc as #native_ty));
                         write_len(state.data, #tag_size, #pfx, count);
                         if __byte_len > 0 {
@@ -406,7 +404,9 @@ fn generate_mut_impl(
             /// # Safety
             /// Caller must ensure `data` contains a valid compact enum value.
             pub unsafe fn new_unchecked(data: &'a mut [u8]) -> Self {
-                Self { state: zeropod::view_state::ViewState::new(#state_name { data, edit: None }) }
+                Self {
+                    state: zeropod::view_state::ViewState::new(#state_name { data, edit: None }),
+                }
             }
 
             #( #setters )*
@@ -449,7 +449,7 @@ fn parse_payload(variant: &Variant) -> Result<VariantPayload, TokenStream> {
         Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
             let ty = fields.unnamed[0].ty.clone();
             if has_compact_attr(&variant.attrs) {
-                let ref_ty = compact_ref_ident(&ty).ok_or_else(|| {
+                let ref_ty = compact_ref_path(&ty).ok_or_else(|| {
                     let msg = format!(
                         "compact ZeroPod enum variant `{}` uses #[zeropod(compact)] with an unsupported payload type",
                         variant.ident
@@ -639,7 +639,7 @@ fn to_snake_case(value: &str) -> String {
     out
 }
 
-fn compact_ref_ident(ty: &Type) -> Option<syn::Path> {
+fn compact_ref_path(ty: &Type) -> Option<syn::Path> {
     let mut path = match ty {
         Type::Path(path) => path.path.clone(),
         _ => return None,

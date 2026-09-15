@@ -48,7 +48,8 @@ pub fn validate_prefixes(ty: &Type) -> syn::Result<()> {
     let Some(args) = angle_args(&segment.arguments) else {
         return Ok(());
     };
-    let index = match segment.ident.to_string().as_str() {
+    let name = segment.ident.to_string();
+    let index = match name.as_str() {
         "String" | "PodString" | "PodOption" => Some(1),
         "Vec" | "PodVec" => Some(2),
         _ => None,
@@ -64,10 +65,7 @@ pub fn validate_prefixes(ty: &Type) -> syn::Result<()> {
             ));
         }
     }
-    if matches!(
-        segment.ident.to_string().as_str(),
-        "Vec" | "PodVec" | "Option" | "PodOption"
-    ) {
+    if matches!(name.as_str(), "Vec" | "PodVec" | "Option" | "PodOption") {
         if let Some(GenericArgument::Type(inner)) = args.first() {
             validate_prefixes(inner)?;
         }

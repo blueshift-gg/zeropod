@@ -72,9 +72,7 @@ impl<const N: usize, const PFX: usize> ZcValidate for PodString<N, PFX> {
         if raw_len > N as u64 {
             return Err(ZeroPodError::InvalidLength);
         }
-        // SAFETY: raw_len <= N, and data is a [MaybeUninit<u8>; N] array.
-        // The bytes come from account data (initialized memory), not
-        // MaybeUninit::uninit().
+        // SAFETY: constructors initialize the backing storage, and raw_len <= N.
         let bytes = unsafe {
             core::slice::from_raw_parts(value.data.as_ptr() as *const u8, raw_len as usize)
         };
