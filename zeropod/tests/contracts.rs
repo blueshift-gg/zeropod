@@ -162,6 +162,44 @@ fn contract_fixed_vec_writes() {
     }
 }
 
+type NestedValue = PodOption<PodVec<PodOption<PodString<2, 4>>, 2, 1>, 2>;
+const NESTED_BYTES: &[u8] = &[
+    1, 0, 1, 1, 2, 0, 0, 0, b'o', b'k', 255, 255, 255, 255, 255, 255, 255,
+];
+
+fn read_nested(value: &NestedValue) {
+    assert!(value.tag_valid());
+    if let Some(values) = value.get_ref() {
+        assert!(values.decode_len() <= 2);
+        for value in values.iter() {
+            assert!(value.tag_valid());
+            if let Some(text) = value.get_ref() {
+                read_text(text);
+            }
+        }
+    }
+}
+
+#[test]
+fn contract_nested_storage() {
+    fixed_bytes::<NestedValue>(NESTED_BYTES, read_nested);
+    let mut values = PodVec::default();
+    values.try_push(PodOption::none()).unwrap();
+    let mut text = PodString::default();
+    text.try_set("é").unwrap();
+    values.try_push(PodOption::some(text)).unwrap();
+    let mut value = NestedValue::some(values);
+    read_nested(&value);
+    store(value);
+    values = value.take().unwrap();
+    assert!(values.remove(0).unwrap().is_none());
+    value.set(Some(values));
+    read_nested(&value);
+    store(value);
+    value.clear();
+    store(value);
+}
+
 #[test]
 fn contract_string_sequences() {
     fn run<const N: usize, const PFX: usize>() {
@@ -426,6 +464,146 @@ fn contract_compact_edits() {
     }
 }
 
+#[derive(ZeroPod)]
+#[zeropod(compact)]
+struct Tails<T: ZcElem + ZcField<Pod = T>> {
+    pub marker: T,
+    first: PodVec<T, 2, 1>,
+    maybe: Option<PodVec<T, 2, 4>>,
+    last: PodVec<T, 2, 2>,
+    text: Option<PodString<4, 8>>,
+}
+
+fn tail_bytes<T: AsRef<[u8]>>(
+    marker: &T,
+    first: &[T],
+    maybe: Option<&[T]>,
+    last: &[T],
+    text: Option<&str>,
+) -> Vec<u8> {
+    let mut bytes = marker.as_ref().to_vec();
+    bytes.extend([first.len() as u8, u8::from(maybe.is_some())]);
+    bytes.extend((last.len() as u16).to_le_bytes());
+    bytes.push(u8::from(text.is_some()));
+    for value in first {
+        bytes.extend(value.as_ref());
+    }
+    if let Some(maybe) = maybe {
+        bytes.extend((maybe.len() as u32).to_le_bytes());
+        for value in maybe {
+            bytes.extend(value.as_ref());
+        }
+    }
+    for value in last {
+        bytes.extend(value.as_ref());
+    }
+    if let Some(text) = text {
+        bytes.extend((text.len() as u64).to_le_bytes());
+        bytes.extend(text.as_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn contract_mixed_tail_edits() {
+    fn run<T: ZcElem + ZcField<Pod = T> + AsRef<[u8]> + Eq + std::fmt::Debug>(values: [T; 2]) {
+        for first in [&values[..0], &values[..2]] {
+            for maybe in [None, Some(&values[..0]), Some(&values[..2])] {
+                for last in [&values[..0], &values[..2]] {
+                    for text in [None, Some(""), Some("é")] {
+                        let initial = tail_bytes(&values[0], first, maybe, last, text);
+                        for mask in 0..16 {
+                            let next_first = if mask & 1 != 0 { &values[..1] } else { first };
+                            let next_maybe = if mask & 2 == 0 {
+                                maybe
+                            } else {
+                                match maybe {
+                                    None => Some(&values[..1]),
+                                    Some([]) => Some(&values[..2]),
+                                    Some(_) => None,
+                                }
+                            };
+                            let next_last = if mask & 4 != 0 {
+                                &values[..2 - last.len()]
+                            } else {
+                                last
+                            };
+                            let next_text = if mask & 8 == 0 {
+                                text
+                            } else {
+                                match text {
+                                    None => Some("é"),
+                                    Some("") => Some("xyz"),
+                                    Some(_) => None,
+                                }
+                            };
+                            let expected = tail_bytes(
+                                &values[0], next_first, next_maybe, next_last, next_text,
+                            );
+                            for capacity in [initial.len(), initial.len().max(expected.len()) + 1] {
+                                let mut storage = vec![0xa5; capacity + 2];
+                                storage[1..1 + initial.len()].copy_from_slice(&initial);
+                                let before = storage.clone();
+                                let bytes = &mut storage[1..1 + capacity];
+                                let mut view = TailsMut::<T>::new(bytes).unwrap();
+                                if mask & 1 != 0 {
+                                    view.set_first(&values).unwrap();
+                                    view.set_first(next_first).unwrap();
+                                }
+                                if mask & 2 != 0 {
+                                    view.set_maybe(next_maybe).unwrap();
+                                }
+                                if mask & 4 != 0 {
+                                    view.set_last(next_last).unwrap();
+                                }
+                                if mask & 8 != 0 {
+                                    view.set_text(next_text).unwrap();
+                                }
+                                assert_eq!(view.projected_size(), expected.len());
+                                let result = view.commit();
+                                if expected.len() <= capacity {
+                                    assert_eq!(result, Ok(expected.len()));
+                                    assert_eq!(view.commit(), result);
+                                    let read = TailsRef::<T>::new(bytes).unwrap();
+                                    assert_eq!(read.marker, values[0]);
+                                    assert_eq!(read.first(), next_first);
+                                    assert_eq!(read.maybe(), next_maybe);
+                                    assert_eq!(read.last(), next_last);
+                                    assert_eq!(read.text(), next_text);
+                                    assert_eq!(&bytes[..expected.len()], expected);
+                                } else {
+                                    assert_eq!(result, Err(zeropod::ZeroPodError::BufferTooSmall));
+                                    assert_eq!(storage, before);
+                                }
+                                assert_eq!(storage[0], 0xa5);
+                                assert_eq!(storage[capacity + 1], 0xa5);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    run([PodU16::from(513), PodU16::from(1027)]);
+    run([[]; 2]);
+}
+
+#[test]
+fn contract_commit_retry() {
+    let mut bytes = [2, 0, 7, 8];
+    let mut view = PairMut::new(&mut bytes).unwrap();
+    view.set_second(&[9, 10]).unwrap();
+    assert_eq!(
+        view.set_second(&[1, 2, 3]),
+        Err(zeropod::ZeroPodError::Overflow)
+    );
+    assert_eq!(view.commit(), Err(zeropod::ZeroPodError::BufferTooSmall));
+    view.set_first(&[]).unwrap();
+    assert_eq!(view.commit(), Ok(4));
+    assert_eq!(view.commit(), Ok(4));
+    assert_eq!(bytes, [0, 2, 9, 10]);
+}
+
 #[test]
 fn contract_abandoned_edits() {
     let mut bytes = record_bytes("a", &[7], Some("ok"));
@@ -650,6 +828,7 @@ mod wire {
 
     #[test]
     fn contract_wincode_options() {
+        decode::<NestedValue>(NESTED_BYTES, read_nested);
         decode::<PodOption<PodString<2>>>(&[1, 2, b'o', b'k'], |v| {
             assert!(v.tag_valid());
             if let Some(s) = v.get_ref() {
@@ -804,6 +983,9 @@ pub fn check_storage(bytes: &mut [u8]) {
     check_compact(bytes);
     check_pair(bytes);
     check_enum(bytes);
+    if let Ok(value) = Cell::<NestedValue>::from_bytes(bytes) {
+        read_nested(&value.value);
+    }
     if let Ok(value) = Cell::<PodString<4>>::from_bytes(bytes) {
         read_text(&value.value);
     }
