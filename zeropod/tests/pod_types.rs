@@ -147,6 +147,9 @@ fn pod_u64_arithmetic() {
     assert_eq!((a * b).get(), 4200);
     assert_eq!((a / b).get(), 2);
     assert_eq!((a % b).get(), 16);
+    let mut assigned = a;
+    assigned += 500u64;
+    assert_eq!(assigned.get(), 600);
 }
 
 #[test]
@@ -392,6 +395,7 @@ fn pod_bool_bitops() {
     assert!(!(t & false).get());
     assert!((f | true).get());
     assert!(!(f | false).get());
+    assert!((!t).is_false());
 }
 
 #[test]
