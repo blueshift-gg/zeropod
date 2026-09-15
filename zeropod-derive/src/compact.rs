@@ -69,7 +69,7 @@ fn generate_header(schema: &Schema, header_name: &syn::Ident) -> TokenStream {
 
     let pod_bounds: Vec<_> = inline_pod_types
         .iter()
-        .map(|pod_ty| quote! { #pod_ty: zeropod::ZcValidate })
+        .map(|pod_ty| quote! { #pod_ty: zeropod::ZcElem })
         .collect();
     let where_clause_with_bounds = where_clause_with_bounds(where_clause, pod_bounds.iter());
 
@@ -108,6 +108,21 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
     let (impl_generics, ty_generics, where_clause) = schema.generics.split_for_impl();
     let bounds = compact_bounds(schema);
     let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
+    let capacity_checks = schema.tail_fields().map(|field| {
+        // Optional tails have their own payload prefix, not PodOption's fixed layout.
+        let FieldKind::Tail(tail) = &field.kind else {
+            unreachable!()
+        };
+        match tail.payload() {
+            TailPayload::String { max, pfx } => {
+                quote! { let _ = zeropod::pod::PodString::<#max, #pfx>::VALID; }
+            }
+            TailPayload::Vec { elem, max, pfx } => {
+                let elem = map_to_pod_type(elem);
+                quote! { let _ = zeropod::pod::PodVec::<#elem, #max, #pfx>::VALID; }
+            }
+        }
+    });
     let mut tail_validations = Vec::new();
     for f in schema.tail_fields() {
         match &f.kind {
@@ -116,13 +131,13 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
                 payload: TailPayload::String { max, pfx },
             }) => {
                 let len_name = format_ident!("__{}_len", f.name);
-                let read_len = read_len_expr(&len_name, *pfx);
+                let read_len = read_length(quote! { __hdr.#len_name }, quote! { 0 }, *pfx, true);
                 tail_validations.push(quote! {
                     let #len_name = #read_len;
                     if #len_name > #max {
                         return Err(zeropod::ZeroPodError::InvalidLength);
                     }
-                    if __tail_offset + #len_name > data.len() {
+                    if #len_name > data.len() - __tail_offset {
                         return Err(zeropod::ZeroPodError::BufferTooSmall);
                     }
                     if core::str::from_utf8(&data[__tail_offset..__tail_offset + #len_name]).is_err() {
@@ -136,15 +151,15 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
                 payload: TailPayload::Vec { elem, max, pfx },
             }) => {
                 let len_name = format_ident!("__{}_len", f.name);
-                let read_len = read_len_expr(&len_name, *pfx);
+                let read_len = read_length(quote! { __hdr.#len_name }, quote! { 0 }, *pfx, true);
                 let mapped_elem = map_to_pod_type(elem);
                 tail_validations.push(quote! {
                     let #len_name = #read_len;
                     if #len_name > #max {
                         return Err(zeropod::ZeroPodError::InvalidLength);
                     }
-                    let __byte_len = #len_name * core::mem::size_of::<#mapped_elem>();
-                    if __tail_offset + __byte_len > data.len() {
+                    let __byte_len = #len_name.checked_mul(core::mem::size_of::<#mapped_elem>()).ok_or(zeropod::ZeroPodError::BufferTooSmall)?;
+                    if __byte_len > data.len() - __tail_offset {
                         return Err(zeropod::ZeroPodError::BufferTooSmall);
                     }
                     let __elem_size = core::mem::size_of::<#mapped_elem>();
@@ -162,12 +177,13 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
                 payload: TailPayload::String { max, pfx },
             }) => {
                 let tag_name = format_ident!("__{}_tag", f.name);
-                let read_payload_len = read_data_len_expr(quote! { __tail_offset }, *pfx);
+                let read_payload_len =
+                    read_length(quote! { data }, quote! { __tail_offset }, *pfx, true);
                 tail_validations.push(quote! {
                     match __hdr.#tag_name[0] {
                         0 => {}
                         1 => {
-                            if __tail_offset + #pfx > data.len() {
+                            if #pfx > data.len() - __tail_offset {
                                 return Err(zeropod::ZeroPodError::BufferTooSmall);
                             }
                             let __byte_len = #read_payload_len;
@@ -175,7 +191,7 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
                                 return Err(zeropod::ZeroPodError::InvalidLength);
                             }
                             let __payload_offset = __tail_offset + #pfx;
-                            if __payload_offset + __byte_len > data.len() {
+                            if __byte_len > data.len() - __payload_offset {
                                 return Err(zeropod::ZeroPodError::BufferTooSmall);
                             }
                             if core::str::from_utf8(&data[__payload_offset..__payload_offset + __byte_len]).is_err() {
@@ -193,12 +209,13 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
             }) => {
                 let tag_name = format_ident!("__{}_tag", f.name);
                 let mapped_elem = map_to_pod_type(elem);
-                let read_payload_len = read_data_len_expr(quote! { __tail_offset }, *pfx);
+                let read_payload_len =
+                    read_length(quote! { data }, quote! { __tail_offset }, *pfx, true);
                 tail_validations.push(quote! {
                     match __hdr.#tag_name[0] {
                         0 => {}
                         1 => {
-                            if __tail_offset + #pfx > data.len() {
+                            if #pfx > data.len() - __tail_offset {
                                 return Err(zeropod::ZeroPodError::BufferTooSmall);
                             }
                             let __count = #read_payload_len;
@@ -207,8 +224,8 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
                             }
                             let __payload_offset = __tail_offset + #pfx;
                             let __elem_size = core::mem::size_of::<#mapped_elem>();
-                            let __byte_len = __count * __elem_size;
-                            if __payload_offset + __byte_len > data.len() {
+                            let __byte_len = __count.checked_mul(__elem_size).ok_or(zeropod::ZeroPodError::BufferTooSmall)?;
+                            if __byte_len > data.len() - __payload_offset {
                                 return Err(zeropod::ZeroPodError::BufferTooSmall);
                             }
                             for __i in 0..__count {
@@ -247,6 +264,7 @@ fn generate_trait_impl(schema: &Schema, header_ty: &TokenStream) -> TokenStream 
             }
 
             fn validate(data: &[u8]) -> Result<(), zeropod::ZeroPodError> {
+                const { #( #capacity_checks )* };
                 if data.len() < core::mem::size_of::<#header_ty>() {
                     return Err(zeropod::ZeroPodError::BufferTooSmall);
                 }
@@ -291,7 +309,7 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
                         let __byte_len = #read_len;
                         #offset_computation
                         unsafe {
-                            let __ptr = self.data.as_ptr().add(__offset);
+                            let __ptr = self.data().as_ptr().add(__offset);
                             let __slice = core::slice::from_raw_parts(__ptr, __byte_len);
                             core::str::from_utf8_unchecked(__slice)
                         }
@@ -311,7 +329,7 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
                         let __count = #read_len;
                         #offset_computation
                         unsafe {
-                            let __ptr = self.data.as_ptr().add(__offset) as *const #mapped_elem;
+                            let __ptr = self.data().as_ptr().add(__offset) as *const #mapped_elem;
                             core::slice::from_raw_parts(__ptr, __count)
                         }
                     }
@@ -333,7 +351,7 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
                         let __byte_len = #read_len;
                         let __payload_offset = __offset + #pfx;
                         unsafe {
-                            let __ptr = self.data.as_ptr().add(__payload_offset);
+                            let __ptr = self.data().as_ptr().add(__payload_offset);
                             let __slice = core::slice::from_raw_parts(__ptr, __byte_len);
                             Some(core::str::from_utf8_unchecked(__slice))
                         }
@@ -357,7 +375,7 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
                         let __count = #read_len;
                         let __payload_offset = __offset + #pfx;
                         unsafe {
-                            let __ptr = self.data.as_ptr().add(__payload_offset) as *const #mapped_elem;
+                            let __ptr = self.data().as_ptr().add(__payload_offset) as *const #mapped_elem;
                             Some(core::slice::from_raw_parts(__ptr, __count))
                         }
                     }
@@ -369,7 +387,7 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
 
     quote! {
         pub struct #ref_name #ref_generics #where_clause_with_bounds {
-            data: &'a [u8],
+            data: zeropod::view_state::ViewState<#struct_name #struct_ty_generics, &'a [u8]>,
         }
 
         impl #ref_impl_generics core::ops::Deref for #ref_name #ref_ty_generics #where_clause_with_bounds {
@@ -382,15 +400,19 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
         impl #ref_impl_generics #ref_name #ref_ty_generics #where_clause_with_bounds {
             pub fn new(data: &'a [u8]) -> Result<Self, zeropod::ZeroPodError> {
                 <#struct_name #struct_ty_generics as zeropod::ZeroPodCompact>::validate(data)?;
-                Ok(Self { data })
+                Ok(unsafe { Self::new_unchecked(data) })
             }
 
+            /// # Safety
+            /// `data` must satisfy this schema's `ZeroPodCompact::validate` contract.
             pub unsafe fn new_unchecked(data: &'a [u8]) -> Self {
-                Self { data }
+                Self { data: zeropod::view_state::ViewState::new(data) }
             }
+
+            fn data(&self) -> &'a [u8] { *self.data }
 
             fn header(&self) -> &'a #header_ty {
-                unsafe { &*(self.data.as_ptr() as *const #header_ty) }
+                unsafe { &*(self.data().as_ptr() as *const #header_ty) }
             }
 
             #( #accessors )*
@@ -404,6 +426,7 @@ fn generate_ref(schema: &Schema, header_ty: &TokenStream, ref_name: &syn::Ident)
 
 fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident) -> TokenStream {
     let struct_name = &schema.name;
+    let state_name = format_ident!("__{}State", mut_name);
     let (_, struct_ty_generics, where_clause) = schema.generics.split_for_impl();
     let mut_generics = generics_with_lifetime(&schema.generics);
     let (mut_impl_generics, mut_ty_generics, _) = mut_generics.split_for_impl();
@@ -411,26 +434,10 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
     let where_clause_with_bounds = where_clause_with_bounds(where_clause, bounds.iter());
     let tail_fields: Vec<_> = schema.tail_fields().collect();
 
-    // Edit descriptor fields.
-    let mut edit_fields = Vec::new();
-    for f in &tail_fields {
-        let edit_name = format_ident!("__{}_edit", f.name);
-        match &f.kind {
-            FieldKind::Tail(TailField::Segment {
-                payload: TailPayload::String { .. },
-                ..
-            }) => {
-                edit_fields.push(quote! { #edit_name: Option<(*const u8, usize)> });
-            }
-            FieldKind::Tail(TailField::Segment {
-                payload: TailPayload::Vec { .. },
-                ..
-            }) => {
-                edit_fields.push(quote! { #edit_name: Option<(*const u8, usize, usize)> });
-            }
-            _ => unreachable!(),
-        }
-    }
+    let edit_fields = tail_fields.iter().map(|field| {
+        let name = format_ident!("__{}_edit", field.name);
+        quote! { #name: Option<(*const u8, usize)> }
+    });
 
     let edit_inits: Vec<_> = tail_fields
         .iter()
@@ -457,7 +464,7 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                         if value.len() > #max {
                             return Err(zeropod::ZeroPodError::Overflow);
                         }
-                        self.#edit_name = Some((value.as_ptr(), value.len()));
+                        unsafe { self.state.get_mut() }.#edit_name = Some((value.as_ptr(), value.len()));
                         Ok(())
                     }
                 });
@@ -472,10 +479,9 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                         if value.len() > #max {
                             return Err(zeropod::ZeroPodError::Overflow);
                         }
-                        self.#edit_name = Some((
+                        unsafe { self.state.get_mut() }.#edit_name = Some((
                             value.as_ptr() as *const u8,
                             value.len(),
-                            core::mem::size_of::<#mapped_elem>(),
                         ));
                         Ok(())
                     }
@@ -491,9 +497,9 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                             if value.len() > #max {
                                 return Err(zeropod::ZeroPodError::Overflow);
                             }
-                            self.#edit_name = Some((value.as_ptr(), value.len()));
+                            unsafe { self.state.get_mut() }.#edit_name = Some((value.as_ptr(), value.len()));
                         } else {
-                            self.#edit_name = Some((core::ptr::null(), 0));
+                            unsafe { self.state.get_mut() }.#edit_name = Some((core::ptr::null(), 0));
                         }
                         Ok(())
                     }
@@ -510,13 +516,12 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                             if value.len() > #max {
                                 return Err(zeropod::ZeroPodError::Overflow);
                             }
-                            self.#edit_name = Some((
+                            unsafe { self.state.get_mut() }.#edit_name = Some((
                                 value.as_ptr() as *const u8,
                                 value.len(),
-                                core::mem::size_of::<#mapped_elem>(),
                             ));
                         } else {
-                            self.#edit_name = Some((core::ptr::null(), 0, core::mem::size_of::<#mapped_elem>()));
+                            unsafe { self.state.get_mut() }.#edit_name = Some((core::ptr::null(), 0));
                         }
                         Ok(())
                     }
@@ -540,7 +545,7 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
             }) => {
                 let read_len = read_len_expr(&len_name, *pfx);
                 proj_parts.push(quote! {
-                    + if let Some((_, byte_len)) = self.#edit_name {
+                    if let Some((_, byte_len)) = self.state.#edit_name {
                         byte_len
                     } else {
                         let __hdr = self.header();
@@ -555,8 +560,8 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                 let read_len = read_len_expr(&len_name, *pfx);
                 let mapped_elem = map_to_pod_type(elem);
                 proj_parts.push(quote! {
-                    + if let Some((_, count, elem_size)) = self.#edit_name {
-                        count * elem_size
+                    if let Some((_, count)) = self.state.#edit_name {
+                        count * core::mem::size_of::<#mapped_elem>()
                     } else {
                         let __hdr = self.header();
                         let __count = #read_len;
@@ -572,7 +577,7 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                 let old_size =
                     old_option_string_size_unchecked_expr(&tag_name, *pfx, quote! { __offset });
                 proj_parts.push(quote! {
-                    + if let Some((ptr, byte_len)) = self.#edit_name {
+                    if let Some((ptr, byte_len)) = self.state.#edit_name {
                         if ptr.is_null() { 0 } else { #pfx + byte_len }
                     } else {
                         let __hdr = self.header();
@@ -594,8 +599,8 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
                     &mapped_elem,
                 );
                 proj_parts.push(quote! {
-                    + if let Some((ptr, count, elem_size)) = self.#edit_name {
-                        if ptr.is_null() { 0 } else { #pfx + count * elem_size }
+                    if let Some((ptr, count)) = self.state.#edit_name {
+                        if ptr.is_null() { 0 } else { #pfx + count * core::mem::size_of::<#mapped_elem>() }
                     } else {
                         let __hdr = self.header();
                         #offset_computation
@@ -608,12 +613,15 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
     }
 
     // commit()
-    let commit_body = generate_commit_body(header_ty, &tail_fields);
+    let commit_body = generate_commit_body(schema, header_ty, &tail_fields);
 
     quote! {
         pub struct #mut_name #mut_generics #where_clause_with_bounds {
+            state: zeropod::view_state::ViewState<#struct_name #struct_ty_generics, #state_name<'a>>,
+        }
+
+        struct #state_name<'a> {
             data: &'a mut [u8],
-            total_len: usize,
             #( #edit_fields ),*
         }
 
@@ -633,40 +641,35 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
         impl #mut_impl_generics #mut_name #mut_ty_generics #where_clause_with_bounds {
             pub fn new(data: &'a mut [u8]) -> Result<Self, zeropod::ZeroPodError> {
                 <#struct_name #struct_ty_generics as zeropod::ZeroPodCompact>::validate(data)?;
-                let total_len = data.len();
-                Ok(Self {
-                    data,
-                    total_len,
-                    #( #edit_inits ),*
-                })
+                Ok(unsafe { Self::new_unchecked(data) })
             }
 
             /// # Safety
-            /// Caller must ensure `data` is at least `HEADER_SIZE` bytes and
-            /// contains a valid compact header. The tail region must be
-            /// consistent with the header length prefixes.
+            /// `data` must satisfy this schema's `ZeroPodCompact::validate` contract.
             pub unsafe fn new_unchecked(data: &'a mut [u8]) -> Self {
-                let total_len = data.len();
                 Self {
-                    data,
-                    total_len,
-                    #( #edit_inits ),*
+                    state: zeropod::view_state::ViewState::new(#state_name {
+                        data,
+                        #( #edit_inits ),*
+                    }),
                 }
             }
 
+            fn data(&self) -> &[u8] { self.state.data }
+
             fn header(&self) -> &#header_ty {
-                unsafe { &*(self.data.as_ptr() as *const #header_ty) }
+                unsafe { &*(self.data().as_ptr() as *const #header_ty) }
             }
 
             fn header_mut(&mut self) -> &mut #header_ty {
-                unsafe { &mut *(self.data.as_mut_ptr() as *mut #header_ty) }
+                unsafe { &mut *(self.state.get_mut().data.as_mut_ptr() as *mut #header_ty) }
             }
 
             #( #setters )*
 
             pub fn projected_size(&self) -> usize {
                 core::mem::size_of::<#header_ty>()
-                #( #proj_parts )*
+                #( .saturating_add(#proj_parts) )*
             }
 
             #commit_body
@@ -675,9 +678,12 @@ fn generate_mut(schema: &Schema, header_ty: &TokenStream, mut_name: &syn::Ident)
 }
 
 fn generate_commit_body(
+    schema: &Schema,
     header_ty: &TokenStream,
     tail_fields: &[&crate::schema::SchemaField],
 ) -> TokenStream {
+    let struct_name = &schema.name;
+    let (_, ty_generics, _) = schema.generics.split_for_impl();
     if tail_fields.is_empty() {
         return quote! {
             pub fn commit(&mut self) -> Result<usize, zeropod::ZeroPodError> {
@@ -712,7 +718,7 @@ fn generate_commit_body(
             let prev_new_len = format_ident!("__new_len_{}", prev_f.name);
             quote! {
                 let #old_off_var: usize = #prev_old_off + #prev_old_len;
-                let #new_off_var: usize = #prev_new_off + #prev_new_len;
+                let #new_off_var: usize = #prev_new_off.checked_add(#prev_new_len).ok_or(zeropod::ZeroPodError::BufferTooSmall)?;
             }
         };
 
@@ -728,7 +734,7 @@ fn generate_commit_body(
                         let __hdr = self.header();
                         #read_len
                     };
-                    let #new_len_var: usize = match self.#edit_name {
+                    let #new_len_var: usize = match self.state.#edit_name {
                         Some((_, __bl)) => __bl,
                         None => #old_len_var,
                     };
@@ -747,8 +753,8 @@ fn generate_commit_body(
                         let __count = #read_len;
                         __count * core::mem::size_of::<#mapped_elem>()
                     };
-                    let #new_len_var: usize = match self.#edit_name {
-                        Some((_, __count, __sz)) => __count * __sz,
+                    let #new_len_var: usize = match self.state.#edit_name {
+                        Some((_, __count)) => __count * core::mem::size_of::<#mapped_elem>(),
                         None => #old_len_var,
                     };
                 });
@@ -759,14 +765,14 @@ fn generate_commit_body(
             }) => {
                 let tag_name = format_ident!("__{}_tag", fname);
                 let old_size =
-                    old_option_string_size_expr(&tag_name, *pfx, quote! { #old_off_var });
+                    old_option_string_size_unchecked_expr(&tag_name, *pfx, quote! { #old_off_var });
                 setup_positions.push(quote! {
                     #offsets
                     let #old_len_var: usize = {
                         let __hdr = self.header();
                         #old_size
                     };
-                    let #new_len_var: usize = match self.#edit_name {
+                    let #new_len_var: usize = match self.state.#edit_name {
                         Some((ptr, __bl)) => {
                             if ptr.is_null() { 0 } else { #pfx + __bl }
                         }
@@ -780,7 +786,7 @@ fn generate_commit_body(
             }) => {
                 let tag_name = format_ident!("__{}_tag", fname);
                 let mapped_elem = map_to_pod_type(elem);
-                let old_size = old_option_vec_size_expr(
+                let old_size = old_option_vec_size_unchecked_expr(
                     &tag_name,
                     *pfx,
                     quote! { #old_off_var },
@@ -792,9 +798,9 @@ fn generate_commit_body(
                         let __hdr = self.header();
                         #old_size
                     };
-                    let #new_len_var: usize = match self.#edit_name {
-                        Some((ptr, __count, __sz)) => {
-                            if ptr.is_null() { 0 } else { #pfx + __count * __sz }
+                    let #new_len_var: usize = match self.state.#edit_name {
+                        Some((ptr, __count)) => {
+                            if ptr.is_null() { 0 } else { #pfx + __count * core::mem::size_of::<#mapped_elem>() }
                         }
                         None => #old_len_var,
                     };
@@ -820,7 +826,7 @@ fn generate_commit_body(
         let new_off_var = format_ident!("__new_off_{}", fname);
         let old_len_var = format_ident!("__old_len_{}", fname);
         phase_1a.push(quote! {
-            if self.#edit_name.is_none()
+            if self.state.#edit_name.is_none()
                 && #new_off_var < #old_off_var
                 && #old_len_var > 0
             {
@@ -843,7 +849,7 @@ fn generate_commit_body(
         let new_off_var = format_ident!("__new_off_{}", fname);
         let old_len_var = format_ident!("__old_len_{}", fname);
         phase_1b.push(quote! {
-            if self.#edit_name.is_none()
+            if self.state.#edit_name.is_none()
                 && #new_off_var > #old_off_var
                 && #old_len_var > 0
             {
@@ -858,181 +864,102 @@ fn generate_commit_body(
         });
     }
 
-    // Phase 2: write edited fields to their final positions.
+    // Write edits after every retained tail is in its final position.
     let mut phase_2 = Vec::new();
-    for f in tail_fields {
-        let fname = &f.name;
-        let edit_name = format_ident!("__{}_edit", fname);
-        let new_off_var = format_ident!("__new_off_{}", fname);
-        match &f.kind {
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::String { .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __new_byte_len)) = self.#edit_name {
-                        if __new_byte_len > 0 {
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __src_ptr,
-                                    __buf_ptr.add(#new_off_var),
-                                    __new_byte_len,
-                                );
-                            }
-                        }
-                    }
-                });
+    for field in tail_fields {
+        let edit = format_ident!("__{}_edit", field.name);
+        let offset = format_ident!("__new_off_{}", field.name);
+        let FieldKind::Tail(tail) = &field.kind else {
+            unreachable!()
+        };
+        let byte_len = match tail.payload() {
+            TailPayload::String { .. } => quote! { __count },
+            TailPayload::Vec { elem, .. } => {
+                let elem = map_to_pod_type(elem);
+                quote! { __count * core::mem::size_of::<#elem>() }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::Vec { .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __count, __elem_size)) = self.#edit_name {
-                        let __new_byte_len = __count * __elem_size;
-                        if __new_byte_len > 0 {
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __src_ptr,
-                                    __buf_ptr.add(#new_off_var),
-                                    __new_byte_len,
-                                );
-                            }
-                        }
-                    }
-                });
+        };
+        let copy = quote! {
+            let __byte_len = #byte_len;
+            if __byte_len > 0 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(__src_ptr, __dst_ptr, __byte_len);
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::String { pfx, .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __new_byte_len)) = self.#edit_name {
-                        if !__src_ptr.is_null() {
-                            let __bytes = (__new_byte_len as u64).to_le_bytes();
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __bytes.as_ptr(),
-                                    __buf_ptr.add(#new_off_var),
-                                    #pfx,
-                                );
-                                if __new_byte_len > 0 {
-                                    core::ptr::copy_nonoverlapping(
-                                        __src_ptr,
-                                        __buf_ptr.add(#new_off_var + #pfx),
-                                        __new_byte_len,
-                                    );
-                                }
-                            }
+        };
+        let write = match tail.presence() {
+            TailPresence::Always => quote! {
+                let __dst_ptr = unsafe { __buf_ptr.add(#offset) };
+                #copy
+            },
+            TailPresence::OptionTag => {
+                let pfx = tail.payload().pfx();
+                quote! {
+                    if !__src_ptr.is_null() {
+                        let __bytes = (__count as u64).to_le_bytes();
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(__bytes.as_ptr(), __buf_ptr.add(#offset), #pfx);
                         }
+                        let __dst_ptr = unsafe { __buf_ptr.add(#offset + #pfx) };
+                        #copy
                     }
-                });
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::Vec { pfx, .. },
-            }) => {
-                phase_2.push(quote! {
-                    if let Some((__src_ptr, __count, __elem_size)) = self.#edit_name {
-                        if !__src_ptr.is_null() {
-                            let __bytes = (__count as u64).to_le_bytes();
-                            let __new_byte_len = __count * __elem_size;
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    __bytes.as_ptr(),
-                                    __buf_ptr.add(#new_off_var),
-                                    #pfx,
-                                );
-                                if __new_byte_len > 0 {
-                                    core::ptr::copy_nonoverlapping(
-                                        __src_ptr,
-                                        __buf_ptr.add(#new_off_var + #pfx),
-                                        __new_byte_len,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
+        };
+        phase_2.push(quote! {
+            if let Some((__src_ptr, __count)) = self.state.#edit {
+                #write
             }
-            _ => unreachable!(),
-        }
+        });
     }
 
-    // Update header length prefixes for edited fields.
     let mut update_lens = Vec::new();
-    for f in tail_fields {
-        let edit_name = format_ident!("__{}_edit", f.name);
-        let len_name = format_ident!("__{}_len", f.name);
-        let pfx_lit = tail_pfx(&f.kind);
-
-        match &f.kind {
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::String { .. },
-            }) => {
-                update_lens.push(quote! {
-                    if let Some((_, __new_byte_len)) = self.#edit_name {
-                        let __bytes = (__new_byte_len as u64).to_le_bytes();
-                        self.header_mut().#len_name[..#pfx_lit].copy_from_slice(&__bytes[..#pfx_lit]);
-                    }
-                });
-            }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::Always,
-                payload: TailPayload::Vec { .. },
-            }) => {
-                update_lens.push(quote! {
-                    if let Some((_, __count, _)) = self.#edit_name {
+    for field in tail_fields {
+        let edit = format_ident!("__{}_edit", field.name);
+        let FieldKind::Tail(tail) = &field.kind else {
+            unreachable!()
+        };
+        update_lens.push(match tail.presence() {
+            TailPresence::Always => {
+                let len = format_ident!("__{}_len", field.name);
+                let pfx = tail.payload().pfx();
+                quote! {
+                    if let Some((_, __count)) = self.state.#edit {
                         let __bytes = (__count as u64).to_le_bytes();
-                        self.header_mut().#len_name[..#pfx_lit].copy_from_slice(&__bytes[..#pfx_lit]);
+                        self.header_mut().#len.copy_from_slice(&__bytes[..#pfx]);
                     }
-                });
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::String { .. },
-            }) => {
-                let tag_name = format_ident!("__{}_tag", f.name);
-                update_lens.push(quote! {
-                    if let Some((ptr, _)) = self.#edit_name {
-                        self.header_mut().#tag_name[0] = if ptr.is_null() { 0 } else { 1 };
+            TailPresence::OptionTag => {
+                let tag = format_ident!("__{}_tag", field.name);
+                quote! {
+                    if let Some((ptr, _)) = self.state.#edit {
+                        self.header_mut().#tag[0] = u8::from(!ptr.is_null());
                     }
-                });
+                }
             }
-            FieldKind::Tail(TailField::Segment {
-                presence: TailPresence::OptionTag,
-                payload: TailPayload::Vec { .. },
-            }) => {
-                let tag_name = format_ident!("__{}_tag", f.name);
-                update_lens.push(quote! {
-                    if let Some((ptr, _, _)) = self.#edit_name {
-                        self.header_mut().#tag_name[0] = if ptr.is_null() { 0 } else { 1 };
-                    }
-                });
-            }
-            _ => unreachable!(),
-        }
+        });
     }
 
     let clear_edits: Vec<_> = tail_fields
         .iter()
         .map(|f| {
             let edit_name = format_ident!("__{}_edit", f.name);
-            quote! { self.#edit_name = None; }
+            quote! { unsafe { self.state.get_mut() }.#edit_name = None; }
         })
         .collect();
 
     quote! {
         pub fn commit(&mut self) -> Result<usize, zeropod::ZeroPodError> {
+            <#struct_name #ty_generics as zeropod::ZeroPodCompact>::validate(self.data())?;
             #( #setup_positions )*
 
-            let __final_total: usize = #last_new_off + #last_new_len;
-            if __final_total > self.data.len() {
+            let __final_total: usize = #last_new_off.checked_add(#last_new_len).ok_or(zeropod::ZeroPodError::BufferTooSmall)?;
+            if __final_total > self.data().len() {
                 return Err(zeropod::ZeroPodError::BufferTooSmall);
             }
 
-            let __buf_ptr = self.data.as_mut_ptr();
+            let __buf_ptr = unsafe { self.state.get_mut() }.data.as_mut_ptr();
 
             // Move unedited fields that shift to a lower offset. Forward
             // iteration is safe here because writing to a lower address never
@@ -1051,7 +978,6 @@ fn generate_commit_body(
 
             #( #update_lens )*
 
-            self.total_len = __final_total;
             #( #clear_edits )*
 
             Ok(__final_total)
@@ -1068,7 +994,7 @@ fn compact_bounds(schema: &Schema) -> Vec<TokenStream> {
         .inline_fields()
         .map(|f| {
             let pod_ty = map_to_pod_type(&f.ty);
-            quote! { #pod_ty: zeropod::ZcValidate }
+            quote! { #pod_ty: zeropod::ZcElem }
         })
         .collect();
 
@@ -1108,120 +1034,28 @@ fn generics_with_lifetime(generics: &syn::Generics) -> syn::Generics {
     generics
 }
 
-fn read_len_expr(len_name: &syn::Ident, pfx: usize) -> TokenStream {
-    match pfx {
-        1 => quote! { __hdr.#len_name[0] as usize },
-        2 => quote! { u16::from_le_bytes(__hdr.#len_name) as usize },
-        4 => quote! { u32::from_le_bytes(__hdr.#len_name) as usize },
-        8 => quote! { u64::from_le_bytes(__hdr.#len_name) as usize },
-        _ => unreachable!("invalid PFX: {}", pfx),
+pub(crate) fn read_length(
+    data: TokenStream,
+    offset: TokenStream,
+    pfx: usize,
+    checked: bool,
+) -> TokenStream {
+    let integer = format_ident!("u{}", pfx * 8);
+    let indices = 0..pfx;
+    let raw = quote! { #integer::from_le_bytes([#(#data[#offset + #indices]),*]) };
+    if checked {
+        quote! { usize::try_from(#raw).map_err(|_| zeropod::ZeroPodError::InvalidLength)? }
+    } else {
+        quote! { (#raw) as usize }
     }
 }
 
-fn read_data_len_expr(offset: TokenStream, pfx: usize) -> TokenStream {
-    match pfx {
-        1 => quote! { data[#offset] as usize },
-        2 => quote! { u16::from_le_bytes([data[#offset], data[#offset + 1]]) as usize },
-        4 => quote! {
-            u32::from_le_bytes([
-                data[#offset],
-                data[#offset + 1],
-                data[#offset + 2],
-                data[#offset + 3],
-            ]) as usize
-        },
-        8 => quote! {
-            u64::from_le_bytes([
-                data[#offset],
-                data[#offset + 1],
-                data[#offset + 2],
-                data[#offset + 3],
-                data[#offset + 4],
-                data[#offset + 5],
-                data[#offset + 6],
-                data[#offset + 7],
-            ]) as usize
-        },
-        _ => unreachable!("invalid PFX: {}", pfx),
-    }
+fn read_len_expr(len_name: &syn::Ident, pfx: usize) -> TokenStream {
+    read_length(quote! { __hdr.#len_name }, quote! { 0 }, pfx, false)
 }
 
 fn read_self_data_len_expr(offset: TokenStream, pfx: usize) -> TokenStream {
-    match pfx {
-        1 => quote! { self.data[#offset] as usize },
-        2 => quote! { u16::from_le_bytes([self.data[#offset], self.data[#offset + 1]]) as usize },
-        4 => quote! {
-            u32::from_le_bytes([
-                self.data[#offset],
-                self.data[#offset + 1],
-                self.data[#offset + 2],
-                self.data[#offset + 3],
-            ]) as usize
-        },
-        8 => quote! {
-            u64::from_le_bytes([
-                self.data[#offset],
-                self.data[#offset + 1],
-                self.data[#offset + 2],
-                self.data[#offset + 3],
-                self.data[#offset + 4],
-                self.data[#offset + 5],
-                self.data[#offset + 6],
-                self.data[#offset + 7],
-            ]) as usize
-        },
-        _ => unreachable!("invalid PFX: {}", pfx),
-    }
-}
-
-fn old_option_string_size_expr(
-    tag_name: &syn::Ident,
-    pfx: usize,
-    offset: TokenStream,
-) -> TokenStream {
-    let read_len = read_self_data_len_expr(offset.clone(), pfx);
-    quote! {
-        match __hdr.#tag_name[0] {
-            0 => 0,
-            1 => {
-                if #offset + #pfx > self.total_len {
-                    return Err(zeropod::ZeroPodError::BufferTooSmall);
-                }
-                let __byte_len = #read_len;
-                if #offset + #pfx + __byte_len > self.total_len {
-                    return Err(zeropod::ZeroPodError::BufferTooSmall);
-                }
-                #pfx + __byte_len
-            }
-            _ => return Err(zeropod::ZeroPodError::InvalidTag),
-        }
-    }
-}
-
-fn old_option_vec_size_expr(
-    tag_name: &syn::Ident,
-    pfx: usize,
-    offset: TokenStream,
-    mapped_elem: &TokenStream,
-) -> TokenStream {
-    let read_len = read_self_data_len_expr(offset.clone(), pfx);
-    quote! {
-        match __hdr.#tag_name[0] {
-            0 => 0,
-            1 => {
-                if #offset + #pfx > self.total_len {
-                    return Err(zeropod::ZeroPodError::BufferTooSmall);
-                }
-                let __count = #read_len;
-                let __byte_len = __count * core::mem::size_of::<#mapped_elem>();
-                if #offset + #pfx + __byte_len > self.total_len {
-                    return Err(zeropod::ZeroPodError::BufferTooSmall);
-                }
-                #pfx + __byte_len
-            }
-            _ => return Err(zeropod::ZeroPodError::InvalidTag),
-        }
-    }
+    read_length(quote! { self.data() }, offset, pfx, false)
 }
 
 fn old_option_string_size_unchecked_expr(
@@ -1325,7 +1159,10 @@ fn compute_offset_tokens(
     }
 
     quote! {
-        let mut __offset = #header_size;
-        #( #steps )*
+        let __offset = {
+            let mut __offset = #header_size;
+            #( #steps )*
+            __offset
+        };
     }
 }

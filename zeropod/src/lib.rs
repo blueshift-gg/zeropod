@@ -1,8 +1,13 @@
 #![no_std]
 
+#[cfg(doctest)]
+mod compile_tests;
+
 pub mod error;
 pub mod pod;
 pub mod traits;
+#[doc(hidden)]
+pub mod view_state;
 
 pub use {
     error::ZeroPodError,

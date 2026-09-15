@@ -13,6 +13,20 @@ mod type_map;
 pub fn derive_zero_pod(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
+    let validate = |field: &syn::Field| type_map::validate_prefixes(&field.ty);
+    let prefixes = match &input.data {
+        syn::Data::Struct(data) => data.fields.iter().try_for_each(validate),
+        syn::Data::Enum(data) => data
+            .variants
+            .iter()
+            .flat_map(|v| &v.fields)
+            .try_for_each(validate),
+        syn::Data::Union(data) => data.fields.named.iter().try_for_each(validate),
+    };
+    if let Err(error) = prefixes {
+        return error.into_compile_error().into();
+    }
+
     let output = match &input.data {
         syn::Data::Enum(_) => {
             if has_compact_attr(&input.attrs) {

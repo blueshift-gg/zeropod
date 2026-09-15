@@ -33,7 +33,7 @@ pub fn generate(schema: &Schema) -> TokenStream {
     let where_clause_with_pod_bounds = {
         let pod_bounds: Vec<_> = pod_field_types
             .iter()
-            .map(|pod_ty| quote! { #pod_ty: zeropod::ZcValidate })
+            .map(|pod_ty| quote! { #pod_ty: zeropod::ZcElem })
             .collect();
 
         match (where_clause, pod_bounds.is_empty()) {

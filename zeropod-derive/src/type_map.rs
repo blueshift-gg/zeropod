@@ -41,6 +41,38 @@ pub enum TailPayload {
     },
 }
 
+pub fn validate_prefixes(ty: &Type) -> syn::Result<()> {
+    let Some(segment) = last_path_segment(ty) else {
+        return Ok(());
+    };
+    let Some(args) = angle_args(&segment.arguments) else {
+        return Ok(());
+    };
+    let name = segment.ident.to_string();
+    let index = match name.as_str() {
+        "String" | "PodString" | "PodOption" => Some(1),
+        "Vec" | "PodVec" => Some(2),
+        _ => None,
+    };
+    if let Some(prefix) = index.and_then(|i| args.iter().nth(i)) {
+        let width = parse_prefix_arg(prefix);
+        if !matches!(width, Some(1 | 2 | 4 | 8))
+            || (segment.ident == "PodOption" && width == Some(8))
+        {
+            return Err(syn::Error::new_spanned(
+                prefix,
+                "ZeroPod prefix must be a supported literal width (1, 2, 4, or 8; options up to 4)",
+            ));
+        }
+    }
+    if matches!(name.as_str(), "Vec" | "PodVec" | "Option" | "PodOption") {
+        if let Some(GenericArgument::Type(inner)) = args.first() {
+            validate_prefixes(inner)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn classify_field(ty: &Type) -> FieldKind {
     if let Some(tail) = classify_option_dynamic(ty) {
         return FieldKind::Tail(tail);

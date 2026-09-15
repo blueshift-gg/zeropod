@@ -1,0 +1,21 @@
+[package]
+name = "zeropod-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zeropod = { path = "../zeropod" }
+
+[[bin]]
+name = "storage"
+path = "fuzz_targets/storage.rs"
+test = false
+doc = false
+bench = false

@@ -144,6 +144,17 @@ assert!(TokenAccount::from_bytes(&buf).is_err());
 | `solana-program-error` | `From<ZeroPodError> for ProgramError` |
 | `wincode` | `SchemaWrite` / `SchemaRead` for all pod types |
 
+## Miri
+
+```sh
+rustup toolchain install nightly-2026-03-27 --component miri,rust-src
+cargo +stable install cargo-nextest --version 0.9.144 --locked
+bash scripts/miri.sh
+```
+
+CI runs the tests with strict provenance under Stacked Borrows and Tree Borrows.
+Set `MIRIFLAGS` to select another configuration; results go to `target/miri-results`.
+
 ## Formal Verification
 
 zeropod includes [Kani](https://model-checking.github.io/kani/) model-checking proofs covering:

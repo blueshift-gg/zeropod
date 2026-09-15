@@ -2,7 +2,6 @@ use core::fmt;
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Default)]
-#[cfg_attr(feature = "wincode", derive(wincode::SchemaWrite, wincode::SchemaRead))]
 pub struct PodBool([u8; 1]);
 
 impl PodBool {

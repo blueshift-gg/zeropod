@@ -59,18 +59,23 @@ const _: () = assert!(core::mem::align_of::<PodString<0, 8>>() == 1);
 
 impl<const N: usize, const PFX: usize> PodString<N, PFX> {
     #[inline(always)]
-    pub fn decode_len(&self) -> usize {
+    pub(crate) fn raw_len(&self) -> u64 {
         #[allow(clippy::let_unit_value)]
         let _ = Self::_CAP_CHECK;
         match PFX {
-            1 => self.len[0] as usize,
-            2 => u16::from_le_bytes([self.len[0], self.len[1]]) as usize,
+            1 => self.len[0] as u64,
+            2 => u16::from_le_bytes([self.len[0], self.len[1]]) as u64,
             _ => {
                 let mut buf = [0u8; 8];
                 buf[..PFX].copy_from_slice(&self.len);
-                u64::from_le_bytes(buf) as usize
+                u64::from_le_bytes(buf)
             }
         }
+    }
+
+    #[inline(always)]
+    pub fn decode_len(&self) -> usize {
+        self.raw_len().min(usize::MAX as u64) as usize
     }
 
     #[inline(always)]
@@ -198,9 +203,10 @@ impl<const N: usize, const PFX: usize> PodString<N, PFX> {
 
 impl<const N: usize, const PFX: usize> Default for PodString<N, PFX> {
     fn default() -> Self {
+        let () = Self::_CAP_CHECK;
         Self {
             len: [0u8; PFX],
-            data: [MaybeUninit::uninit(); N],
+            data: [MaybeUninit::zeroed(); N],
         }
     }
 }

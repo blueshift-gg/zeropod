@@ -50,6 +50,7 @@ impl<T: Copy, const PFX: usize> PodOption<T, PFX> {
 
     #[inline(always)]
     pub fn none() -> Self {
+        let () = Self::_PFX_CHECK;
         Self {
             tag: [0u8; PFX],
             value: MaybeUninit::zeroed(),
@@ -95,15 +96,18 @@ impl<T: Copy, const PFX: usize> PodOption<T, PFX> {
 
     /// Borrow the inner value without checking the tag.
     ///
-    /// This is safe to call when `T: ZcElem` (align-1, Copy) because the value
-    /// bytes are always initialized (zeroed by `none()`, written by `some()`).
-    /// Forming `&T` is sound. However, the `T` value may not pass `ZcValidate`
-    /// when tag == 0 — the caller must handle semantic validity.
+    /// # Safety
+    /// The payload must be initialized and valid for `T`, including the
+    /// invariants required by its safe accessors. `None` does not establish this.
+    ///
+    /// ```compile_fail,E0133
+    /// use zeropod::pod::PodOption;
+    /// let value = PodOption::<u8>::none();
+    /// value.value_unchecked();
+    /// ```
     #[inline(always)]
-    pub fn value_unchecked(&self) -> &T {
-        // SAFETY: MaybeUninit is zeroed (none) or written (some). T is Copy
-        // with align 1 (ZcElem). Forming &T over initialized memory is sound.
-        unsafe { self.value.assume_init_ref() }
+    pub unsafe fn value_unchecked(&self) -> &T {
+        self.value.assume_init_ref()
     }
 
     #[inline(always)]
@@ -130,7 +134,8 @@ impl<T: Copy, const PFX: usize> PodOption<T, PFX> {
     }
 
     /// # Safety
-    /// Caller must ensure tag == 1 (Some).
+    /// The payload must be initialized and Rust-valid for `T`. Its semantic
+    /// invariants must be validated before using accessors that rely on them.
     #[inline(always)]
     pub unsafe fn assume_init_ref(&self) -> &T {
         self.value.assume_init_ref()
@@ -375,12 +380,12 @@ mod kani_proofs {
     fn value_unchecked_reference_sound() {
         let v: u8 = kani::any();
         let pod = PodOption::<u8, 1>::some(v);
-        let r = pod.value_unchecked();
+        let r = unsafe { pod.value_unchecked() };
         assert!(*r == v, "value_unchecked on Some must return the value");
 
         // Also safe on None — bytes are zeroed, u8 is valid for all patterns.
         let none_pod = PodOption::<u8, 1>::none();
-        let r2 = none_pod.value_unchecked();
+        let r2 = unsafe { none_pod.value_unchecked() };
         assert!(*r2 == 0, "value_unchecked on None returns zeroed bytes");
     }
 }

@@ -65,8 +65,6 @@ enum WideCompactEvent {
     Label(zeropod::String<8>) = 300,
 }
 
-// --- Header tests ---
-
 #[test]
 fn compact_header_size() {
     // authority(32) + PodU64(8) + PodBool(1) + bio_len(1, PFX=1) + tags_len(2,
@@ -373,8 +371,6 @@ fn compact_tagged_union_rejects_invalid_tags_and_payloads() {
     );
 }
 
-// --- Ref tests ---
-
 #[test]
 fn compact_ref_inline_via_deref() {
     let buf = vec![0u8; 100];
@@ -405,18 +401,12 @@ fn compact_ref_bio_with_data() {
 #[test]
 fn compact_ref_tags_with_data() {
     let mut buf = vec![0u8; 200];
-    // bio_len = 0 (offset 41)
-    // tags_len at offset 42-43, PFX=2
-    buf[42] = 1;
-    buf[43] = 0; // 1 tag
-                 // tags data at offset 44 (header) + 0 (bio empty) = 44
+    buf[42] = 1; // One tag follows the 44-byte header.
     buf[44..76].copy_from_slice(&[0xAA; 32]);
     let profile = ProfileRef::new(&buf).unwrap();
     assert_eq!(profile.tags().len(), 1);
     assert_eq!(profile.tags()[0], [0xAA; 32]);
 }
-
-// --- Validation tests ---
 
 #[test]
 fn compact_validate_overlength_bio() {
@@ -432,8 +422,6 @@ fn compact_validate_tail_overflow() {
     assert!(Profile::validate(&buf).is_err());
 }
 
-// --- Mut tests ---
-
 #[test]
 fn compact_mut_inline_via_deref() {
     let mut buf = vec![0u8; 200];
@@ -445,113 +433,79 @@ fn compact_mut_inline_via_deref() {
 }
 
 #[test]
-fn compact_mut_set_bio() {
-    let mut buf = vec![0u8; 200];
-    let mut profile = ProfileMut::new(&mut buf).unwrap();
-    profile.set_bio("hello world").unwrap();
-    let new_size = profile.commit().unwrap();
-    assert_eq!(new_size, 44 + 11);
-
-    let view = ProfileRef::new(&buf[..new_size]).unwrap();
-    assert_eq!(view.bio(), "hello world");
-}
-
-#[test]
-fn compact_mut_set_bio_and_tags() {
-    let mut buf = vec![0u8; 200];
-    let tag1 = [0xAA; 32];
-    let tag2 = [0xBB; 32];
-
-    let mut profile = ProfileMut::new(&mut buf).unwrap();
-    profile.set_bio("test").unwrap();
-    let tags = [tag1, tag2];
-    profile.set_tags(&tags).unwrap();
-    let new_size = profile.commit().unwrap();
-    assert_eq!(new_size, 44 + 4 + 64);
-
-    let view = ProfileRef::new(&buf[..new_size]).unwrap();
-    assert_eq!(view.bio(), "test");
-    assert_eq!(view.tags().len(), 2);
-    assert_eq!(view.tags()[0], [0xAA; 32]);
-    assert_eq!(view.tags()[1], [0xBB; 32]);
-}
-
-#[test]
-fn compact_mut_projected_size() {
-    let mut buf = vec![0u8; 200];
-    let mut profile = ProfileMut::new(&mut buf).unwrap();
-    assert_eq!(profile.projected_size(), 44);
-    profile.set_bio("hello").unwrap();
-    assert_eq!(profile.projected_size(), 44 + 5);
-}
-
-#[test]
-fn compact_mut_overwrite_shorter() {
-    let mut buf = vec![0u8; 200];
-    {
+fn compact_mut_grow_and_shrink_preserve_tags() {
+    let tags = [[0x11; 32], [0x22; 32], [0x33; 32]];
+    let longest = "x".repeat(64);
+    let oversized = "x".repeat(65);
+    let medium = "y".repeat(42);
+    for tags in [&tags[..1], &tags[..3]] {
+        let mut buf = [0u8; 256];
         let mut profile = ProfileMut::new(&mut buf).unwrap();
-        profile.set_bio("hello world").unwrap();
+        profile.set_tags(tags).unwrap();
+        assert_eq!(
+            profile.set_bio(&oversized),
+            Err(zeropod::ZeroPodError::Overflow)
+        );
         profile.commit().unwrap();
+
+        for bio in ["a", &longest, "b", &medium] {
+            let mut profile = ProfileMut::new(&mut buf).unwrap();
+            profile.set_bio(bio).unwrap();
+            let len = 44 + bio.len() + tags.len() * 32;
+            assert_eq!(profile.projected_size(), len);
+            assert_eq!(profile.commit(), Ok(len));
+            assert_eq!(profile.commit(), Ok(len));
+
+            let view = ProfileRef::new(&buf[..len]).unwrap();
+            assert_eq!(view.bio(), bio);
+            assert_eq!(view.tags(), tags);
+            assert_eq!(&buf[41..44], &[bio.len() as u8, tags.len() as u8, 0]);
+            assert_eq!(&buf[44..44 + bio.len()], bio.as_bytes());
+            assert_eq!(&buf[44 + bio.len()..len], tags.as_flattened());
+        }
+
+        let before = buf;
+        let len = 44 + medium.len() + tags.len() * 32;
+        let mut profile = ProfileMut::new(&mut buf[..len]).unwrap();
+        profile.set_bio(&longest).unwrap();
+        assert_eq!(profile.commit(), Err(zeropod::ZeroPodError::BufferTooSmall));
+        assert_eq!(buf, before);
     }
-    {
-        let mut profile = ProfileMut::new(&mut buf).unwrap();
-        profile.set_bio("hi").unwrap();
-        let new_size = profile.commit().unwrap();
-        assert_eq!(new_size, 44 + 2);
-    }
-    let view = ProfileRef::new(&buf[..46]).unwrap();
-    assert_eq!(view.bio(), "hi");
+}
+
+#[allow(dead_code)]
+#[derive(ZeroPod)]
+#[zeropod(compact)]
+struct MultiTail {
+    pub id: u32,
+    pub a: zeropod::String<32>,
+    pub b: zeropod::String<32>,
+    pub c: zeropod::Vec<u8, 32>,
 }
 
 #[test]
-fn compact_mut_overflow_rejected() {
-    let mut buf = vec![0u8; 200];
-    let mut profile = ProfileMut::new(&mut buf).unwrap();
-    let long = "x".repeat(65);
-    assert!(profile.set_bio(&long).is_err());
-}
+fn compact_mut_mixed_shifts_preserve_unedited_tails() {
+    let mut buf = [0u8; 128];
+    let tail = [1, 2, 3, 4, 5, 6, 7];
+    let mut view = MultiTailMut::new(&mut buf).unwrap();
+    view.set_a("a").unwrap();
+    view.set_b("bbbbb").unwrap();
+    view.set_c(&tail).unwrap();
+    view.commit().unwrap();
 
-#[test]
-fn compact_mut_commit_preserves_unedited() {
-    let mut buf = vec![0u8; 200];
-    {
-        let mut profile = ProfileMut::new(&mut buf).unwrap();
-        profile.set_bio("hello").unwrap();
-        profile.commit().unwrap();
-    }
-    {
-        let mut profile = ProfileMut::new(&mut buf).unwrap();
-        let new_size = profile.commit().unwrap();
-        assert_eq!(new_size, 44 + 5);
-    }
-    let view = ProfileRef::new(&buf[..49]).unwrap();
-    assert_eq!(view.bio(), "hello");
-}
-
-#[test]
-fn compact_mut_bio_shift_preserves_tags() {
-    let mut buf = vec![0u8; 300];
-    let tag = [0xCC; 32];
-
-    // Write bio + tags
-    {
-        let mut profile = ProfileMut::new(&mut buf).unwrap();
-        profile.set_bio("long bio text here!").unwrap();
-        let tags = [tag];
-        profile.set_tags(&tags).unwrap();
-        profile.commit().unwrap();
-    }
-
-    // Now shorten bio — tags must move but preserve content
-    {
-        let mut profile = ProfileMut::new(&mut buf).unwrap();
-        profile.set_bio("hi").unwrap();
-        // Don't set tags — they should be preserved from old position
-        let new_size = profile.commit().unwrap();
-
-        let view = ProfileRef::new(&buf[..new_size]).unwrap();
-        assert_eq!(view.bio(), "hi");
-        assert_eq!(view.tags().len(), 1);
-        assert_eq!(view.tags()[0], [0xCC; 32]);
+    for (a, b) in [
+        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaa", None),
+        ("aa", Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")),
+    ] {
+        let mut view = MultiTailMut::new(&mut buf).unwrap();
+        view.set_a(a).unwrap();
+        if let Some(b) = b {
+            view.set_b(b).unwrap();
+        }
+        let len = view.commit().unwrap();
+        let view = MultiTailRef::new(&buf[..len]).unwrap();
+        assert_eq!(view.a(), a);
+        assert_eq!(view.b(), b.unwrap_or("bbbbb"));
+        assert_eq!(view.c(), &tail);
     }
 }
