@@ -15,12 +15,14 @@ macro_rules! tuple {
             const SIZE: Option<usize> = sum(&[$($item::SIZE),+]);
             const ANY_BYTES: bool = true $(&& $item::ANY_BYTES)+;
 
+            #[inline]
             fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
                 let mut at = 0;
                 $(at += $item::check(from(bytes, at), &[])?;)+
                 Ok(at)
             }
 
+            #[inline]
             unsafe fn len(bytes: &[u8]) -> usize {
                 let mut at = 0;
                 // SAFETY: the items follow one another.
@@ -41,10 +43,12 @@ macro_rules! tuple {
                 }
             }
 
+            #[inline]
             fn encoded_len(value: &Self::In<'_>, _: &[usize]) -> Result<usize, Error> {
                 Ok(0 $(+ $item::encoded_len(&value.$index, &[])?)+)
             }
 
+            #[inline]
             unsafe fn write(value: &Self::In<'_>, out: &mut [u8]) -> usize {
                 let mut at = 0;
                 // SAFETY: `out` holds every item, in order.
@@ -52,6 +56,8 @@ macro_rules! tuple {
                 at
             }
 
+
+            #[inline]
             fn max_len(_: &[usize]) -> Option<usize> {
                 Some(0 $(+ $item::max_len(&[])?)+)
             }

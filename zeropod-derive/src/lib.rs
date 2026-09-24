@@ -257,6 +257,8 @@ fn newtype(input: &DeriveInput, field: &Field, context: &Context) -> TokenStream
                 unsafe { <#ty as #zp>::write(value, out) }
             }
 
+
+            #[inline]
             fn max_len(_: &[usize]) -> ::core::option::Option<usize> {
                 <#ty as #zp>::max_len(#limits)
             }
@@ -322,7 +324,7 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
                 let at = unsafe { #at };
                 // SAFETY: the view holds a valid encoding `total` long, in
                 // which this field starts at `at`.
-                unsafe { #private::replace::<#ty>(&mut self.1, at, total, &value, #limits) }
+                unsafe { #private::replace::<#ty>(&mut self.1, at, || total, &value, #limits) }
             }
         }
     });
@@ -380,7 +382,16 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
                 _: &[usize],
             ) -> ::core::result::Result<usize, #krate::Error> {
                 // Evaluated here, so its layout checks run for every type.
-                let _ = <Self as #zp>::SIZE;
+                if let ::core::option::Option::Some(size) = <Self as #zp>::SIZE {
+                    // Every byte pattern of the one length is valid.
+                    if <Self as #zp>::ANY_BYTES {
+                        return if bytes.len() >= size {
+                            ::core::result::Result::Ok(size)
+                        } else {
+                            ::core::result::Result::Err(#krate::Error::TooShort)
+                        };
+                    }
+                }
                 let mut at: usize = 0;
                 #(at += <#tys as #zp>::check(#private::from(bytes, at), #limits)?;)*
                 ::core::result::Result::Ok(at)
@@ -424,6 +435,8 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
                 at
             }
 
+
+            #[inline]
             fn max_len(_: &[usize]) -> ::core::option::Option<usize> {
                 let mut len: usize = 0;
                 #(len = len.checked_add(<#tys as #zp>::max_len(#limits)?)?;)*
@@ -774,6 +787,8 @@ fn enumeration(
                 }
             }
 
+
+            #[inline]
             fn max_len(_: &[usize]) -> ::core::option::Option<usize> {
                 let mut len: usize = 0;
                 #(len = len.max(#max_lens?);)*

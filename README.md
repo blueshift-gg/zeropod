@@ -48,7 +48,7 @@ let used = view.size();
 
 | Field | Stored as |
 |---|---|
-| `u8`…`u128`, `i8`…`i128`, `f32`, `f64` | little-endian; a NaN is refused, as Borsh refuses it |
+| `u8`…`u128`, `i8`…`i128` | little-endian |
 | `bool` | one byte, 0 or 1 |
 | `()`, `PhantomData<T>` | nothing |
 | `[T; N]` of fixed-size items, `Address` (feature `solana-address`) | the items in place |

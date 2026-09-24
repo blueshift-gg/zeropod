@@ -35,25 +35,23 @@ fn fits<const N: usize>(bytes: &[u8]) -> Result<usize, Error> {
     }
 }
 
-/// Little-endian numbers. `valid` rejects the values Borsh rejects: NaN.
+/// Little-endian integers, every one of whose bytes is valid. Floats are
+/// left out: a NaN has many encodings and is not equal to itself, and SBF
+/// has no floating point to compare them with.
 macro_rules! number {
-    ($($ty:ty => $stored:ty, $any_bytes:expr, $valid:expr);* $(;)?) => {$(
-        // SAFETY: `check` accepts `SIZE` bytes holding a value `valid`
-        // accepts, and `read` and `write` use exactly those.
+    ($($ty:ty => $stored:ty);* $(;)?) => {$(
+        // SAFETY: `check` accepts `SIZE` bytes, every value of which is
+        // valid, and `read` and `write` use exactly those.
         unsafe impl ZeroPod for $ty {
             type Ref<'a> = $ty;
             type In<'a> = $ty;
             const SIZE: Option<usize> = Some(size_of::<$ty>());
-            const ANY_BYTES: bool = $any_bytes;
+            const ANY_BYTES: bool = true;
             const NATIVE: bool = cfg!(target_endian = "little");
 
             #[inline(always)]
             fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
-                let size = fits::<{ size_of::<$ty>() }>(bytes)?;
-                let valid: fn(&$ty) -> bool = $valid;
-                // SAFETY: the bytes hold the number.
-                let value = unsafe { Self::read(bytes) };
-                if valid(&value) { Ok(size) } else { Err(Error::InvalidFloat) }
+                fits::<{ size_of::<$ty>() }>(bytes)
             }
 
             #[inline(always)]
@@ -69,9 +67,8 @@ macro_rules! number {
             }
 
             #[inline(always)]
-            fn encoded_len(value: &$ty, _: &[usize]) -> Result<usize, Error> {
-                let valid: fn(&$ty) -> bool = $valid;
-                if valid(value) { Ok(size_of::<$ty>()) } else { Err(Error::InvalidFloat) }
+            fn encoded_len(_: &$ty, _: &[usize]) -> Result<usize, Error> {
+                Ok(size_of::<$ty>())
             }
 
             #[inline(always)]
@@ -82,6 +79,8 @@ macro_rules! number {
                 size_of::<$ty>()
             }
 
+
+            #[inline]
             fn max_len(_: &[usize]) -> Option<usize> {
                 Some(size_of::<$ty>())
             }
@@ -109,18 +108,16 @@ macro_rules! number {
 }
 
 number!(
-    u8 => u8, true, |_| true;
-    i8 => i8, true, |_| true;
-    u16 => crate::U16, true, |_| true;
-    u32 => crate::U32, true, |_| true;
-    u64 => crate::U64, true, |_| true;
-    u128 => crate::U128, true, |_| true;
-    i16 => crate::I16, true, |_| true;
-    i32 => crate::I32, true, |_| true;
-    i64 => crate::I64, true, |_| true;
-    i128 => crate::I128, true, |_| true;
-    f32 => crate::F32, false, |value| !value.is_nan();
-    f64 => crate::F64, false, |value| !value.is_nan();
+    u8 => u8;
+    i8 => i8;
+    u16 => crate::U16;
+    u32 => crate::U32;
+    u64 => crate::U64;
+    u128 => crate::U128;
+    i16 => crate::I16;
+    i32 => crate::I32;
+    i64 => crate::I64;
+    i128 => crate::I128;
 );
 
 // SAFETY: `check` accepts one byte, 0 or 1, which is a valid `bool`, and
@@ -163,6 +160,7 @@ unsafe impl ZeroPod for bool {
         1
     }
 
+    #[inline]
     fn max_len(_: &[usize]) -> Option<usize> {
         Some(1)
     }
@@ -217,6 +215,8 @@ macro_rules! nothing {
                 0
             }
 
+
+            #[inline]
             fn max_len(_: &[usize]) -> Option<usize> {
                 Some(0)
             }
@@ -286,6 +286,7 @@ unsafe impl ZeroPod for solana_address::Address {
         32
     }
 
+    #[inline]
     fn max_len(_: &[usize]) -> Option<usize> {
         Some(32)
     }

@@ -25,6 +25,7 @@ unsafe impl<T: Plain, const N: usize> ZeroPod for [T; N] {
     const ANY_BYTES: bool = T::ANY_BYTES;
     const NATIVE: bool = T::NATIVE;
 
+    #[inline]
     fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
         let size = item_size::<T>();
         let items = bytes.get(..N * size).ok_or(Error::TooShort)?;
@@ -36,16 +37,19 @@ unsafe impl<T: Plain, const N: usize> ZeroPod for [T; N] {
         Ok(N * size)
     }
 
+    #[inline]
     unsafe fn len(_: &[u8]) -> usize {
         N * item_size::<T>()
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> &[T::Stored; N] {
         // SAFETY: the `N` items are there, each a valid `Stored` of
         // alignment 1.
         unsafe { &*bytes.as_ptr().cast() }
     }
 
+    #[inline]
     fn encoded_len(values: &[T; N], _: &[usize]) -> Result<usize, Error> {
         values
             .iter()
@@ -53,6 +57,7 @@ unsafe impl<T: Plain, const N: usize> ZeroPod for [T; N] {
         Ok(N * item_size::<T>())
     }
 
+    #[inline]
     unsafe fn write(values: &[T; N], out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the `N` items.
         unsafe {
@@ -62,6 +67,7 @@ unsafe impl<T: Plain, const N: usize> ZeroPod for [T; N] {
         }
     }
 
+    #[inline]
     fn max_len(_: &[usize]) -> Option<usize> {
         Some(N * item_size::<T>())
     }
@@ -155,6 +161,7 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
         Self: 'a;
     const SIZE: Option<usize> = Some(4 + N);
 
+    #[inline]
     fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
         let len = count(bytes)?;
         if len > N {
@@ -167,10 +174,12 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
         Ok(4 + N)
     }
 
+    #[inline]
     unsafe fn len(_: &[u8]) -> usize {
         4 + N
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> &str {
         // SAFETY: the count's bytes follow it, and are UTF-8.
         unsafe {
@@ -179,11 +188,13 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
         }
     }
 
+    #[inline]
     fn encoded_len(value: &&str, _: &[usize]) -> Result<usize, Error> {
         within(value.len(), &[N])?;
         Ok(4 + N)
     }
 
+    #[inline]
     unsafe fn write(value: &&str, out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the count and `N` bytes, and the text fits them.
         unsafe {
@@ -196,6 +207,7 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
         4 + N
     }
 
+    #[inline]
     fn max_len(_: &[usize]) -> Option<usize> {
         Some(4 + N)
     }
@@ -286,6 +298,7 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         Self: 'a;
     const SIZE: Option<usize> = Some(4 + N * item_size::<T>());
 
+    #[inline]
     fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
         let len = count(bytes)?;
         if len > N {
@@ -302,10 +315,12 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         Ok(4 + N * size)
     }
 
+    #[inline]
     unsafe fn len(_: &[u8]) -> usize {
         4 + N * item_size::<T>()
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> &[T::Stored] {
         // SAFETY: the count's items follow it, each a valid `Stored` of
         // alignment 1 and size `SIZE`.
@@ -315,11 +330,13 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         }
     }
 
+    #[inline]
     fn encoded_len(values: &&[T], _: &[usize]) -> Result<usize, Error> {
         within(values.len(), &[N])?;
         Ok(4 + N * item_size::<T>())
     }
 
+    #[inline]
     unsafe fn write(values: &&[T], out: &mut [u8]) -> usize {
         let size = item_size::<T>();
         // SAFETY: `out` holds the count and `N` items, and the values fit them.
@@ -334,6 +351,7 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         4 + N * size
     }
 
+    #[inline]
     fn max_len(_: &[usize]) -> Option<usize> {
         Some(4 + N * item_size::<T>())
     }

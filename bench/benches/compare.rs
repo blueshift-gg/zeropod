@@ -2,9 +2,10 @@
 
 use std::hint::black_box;
 
-use bench::{Account, AccountRef, account};
+use bench::{Account, AccountRef, FixedCopy, FixedMuck, account, fixed};
 use borsh::BorshDeserialize;
 use criterion::{Criterion, criterion_group, criterion_main};
+use zerocopy::FromBytes;
 use zeropod::Layout;
 
 /// Writing into a buffer that exists: the encoding alone.
@@ -148,12 +149,63 @@ fn update_variable_field(c: &mut Criterion) {
     group.finish();
 }
 
+/// Fixed fields only: bytemuck and zerocopy cast the bytes to a struct.
+/// Each reads a field, then adds one to it in place.
+fn fixed_fields(c: &mut Criterion) {
+    let bytes = borsh::to_vec(&fixed()).unwrap();
+    let mut group = c.benchmark_group("fixed_read");
+    group.bench_function("bytemuck", |b| {
+        b.iter(|| {
+            bytemuck::try_from_bytes::<FixedMuck>(black_box(&bytes))
+                .unwrap()
+                .amount
+        })
+    });
+    group.bench_function("zerocopy", |b| {
+        b.iter(|| {
+            FixedCopy::ref_from_bytes(black_box(&bytes))
+                .unwrap()
+                .amount
+                .get()
+        })
+    });
+    group.bench_function("zeropod", |b| {
+        b.iter(|| bench::Fixed::view(black_box(&bytes)).unwrap().amount())
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("fixed_update");
+    group.bench_function("bytemuck", |b| {
+        let mut bytes = bytes.clone();
+        b.iter(|| {
+            let value = bytemuck::try_from_bytes_mut::<FixedMuck>(black_box(&mut bytes)).unwrap();
+            value.amount += 1;
+        })
+    });
+    group.bench_function("zerocopy", |b| {
+        let mut bytes = bytes.clone();
+        b.iter(|| {
+            let value = FixedCopy::mut_from_bytes(black_box(&mut bytes)).unwrap();
+            value.amount += 1;
+        })
+    });
+    group.bench_function("zeropod", |b| {
+        let mut bytes = bytes.clone();
+        b.iter(|| {
+            let view = bench::Fixed::view_mut(black_box(&mut bytes)).unwrap();
+            view.set_amount(view.amount() + 1).unwrap();
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     compare,
     encode,
     decode,
     read_last_field,
     update_fixed_field,
-    update_variable_field
+    update_variable_field,
+    fixed_fields
 );
 criterion_main!(compare);

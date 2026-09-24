@@ -80,17 +80,19 @@ pub unsafe fn from_unchecked_mut(bytes: &mut [u8], at: usize) -> &mut [u8] {
     unsafe { bytes.get_unchecked_mut(at..) }
 }
 
-/// Replaces the `T` encoded at `at` with `value`, moving the bytes after it
-/// up to `total`, the encoding's end, to where the new length puts them.
+/// Replaces the `T` encoded at `at` with `value`. A field of fixed size is
+/// written in place; any other moves the bytes after it, up to `total()`,
+/// the encoding's end, to where its new length puts them.
 ///
 /// # Safety
 ///
-/// `bytes` hold a valid encoding `total` long, in which a field of type `T`
-/// with `limits` starts at `at`.
+/// `bytes` hold a valid encoding `total()` long, in which a field of type
+/// `T` with `limits` starts at `at`.
+#[inline(always)]
 pub unsafe fn replace<T: ZeroPod>(
     bytes: &mut Bytes,
     at: usize,
-    total: usize,
+    total: impl FnOnce() -> usize,
     value: &T::In<'_>,
     limits: &[usize],
 ) -> Result<(), Error> {
@@ -98,6 +100,12 @@ pub unsafe fn replace<T: ZeroPod>(
     // SAFETY: the bytes will hold a valid encoding again: the field is
     // rewritten with a valid value, and the fields after it are moved whole.
     let bytes = unsafe { bytes.as_mut_slice() };
+    if T::SIZE.is_some() {
+        // SAFETY: the field is there, and a new value is as long as the old.
+        unsafe { T::write(value, from_unchecked_mut(bytes, at)) };
+        return Ok(());
+    }
+    let total = total();
     // SAFETY: a `T` starts at `at`.
     let old = unsafe { T::len(from_unchecked(bytes, at)) };
     let end = total - old + new;
@@ -168,7 +176,7 @@ mod proofs {
 
         // SAFETY: the bytes hold two valid fields, `total` long, the first at 0.
         let result =
-            unsafe { replace::<Option<u8>>(Bytes::new_mut(&mut bytes), 0, total, &value, &[]) };
+            unsafe { replace::<Option<u8>>(Bytes::new_mut(&mut bytes), 0, || total, &value, &[]) };
 
         match result {
             Ok(()) => {

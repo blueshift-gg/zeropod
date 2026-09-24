@@ -99,7 +99,7 @@ pub use error::Error;
 #[cfg(feature = "alloc")]
 pub use heap::Items;
 pub use scalar::Plain;
-pub use zerocopy::little_endian::{F32, F64, I16, I32, I64, I128, U16, U32, U64, U128};
+pub use zerocopy::little_endian::{I16, I32, I64, I128, U16, U32, U64, U128};
 pub use zeropod_derive::ZeroPod;
 
 /// A type stored in Borsh's encoding and read in place.

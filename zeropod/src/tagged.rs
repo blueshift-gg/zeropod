@@ -15,6 +15,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Option<T> {
     where
         Self: 'a;
 
+    #[inline]
     fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
         match bytes.first() {
             Some(0) => Ok(1),
@@ -24,6 +25,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Option<T> {
         }
     }
 
+    #[inline]
     unsafe fn len(bytes: &[u8]) -> usize {
         // SAFETY: a valid encoding starts with its tag, and a value follows a
         // tag of 1.
@@ -35,6 +37,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Option<T> {
         }
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> Self::Ref<'_> {
         // SAFETY: as in `len`.
         unsafe {
@@ -45,6 +48,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Option<T> {
         }
     }
 
+    #[inline]
     fn encoded_len(value: &Self::In<'_>, limits: &[usize]) -> Result<usize, Error> {
         match value {
             None => Ok(1),
@@ -52,6 +56,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Option<T> {
         }
     }
 
+    #[inline]
     unsafe fn write(value: &Self::In<'_>, out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the encoding: the tag, then the value.
         unsafe {
@@ -68,6 +73,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Option<T> {
         }
     }
 
+    #[inline]
     fn max_len(limits: &[usize]) -> Option<usize> {
         Some(1 + T::max_len(limits)?)
     }
@@ -93,6 +99,7 @@ unsafe impl<T: ZeroPod, E: ZeroPod> ZeroPod for Result<T, E> {
     where
         Self: 'a;
 
+    #[inline]
     fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
         match bytes.first() {
             Some(0) => Ok(1 + E::check(from(bytes, 1), limits)?),
@@ -102,6 +109,7 @@ unsafe impl<T: ZeroPod, E: ZeroPod> ZeroPod for Result<T, E> {
         }
     }
 
+    #[inline]
     unsafe fn len(bytes: &[u8]) -> usize {
         // SAFETY: a valid encoding starts with its tag, then its value.
         unsafe {
@@ -113,6 +121,7 @@ unsafe impl<T: ZeroPod, E: ZeroPod> ZeroPod for Result<T, E> {
         }
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> Self::Ref<'_> {
         // SAFETY: as in `len`.
         unsafe {
@@ -124,6 +133,7 @@ unsafe impl<T: ZeroPod, E: ZeroPod> ZeroPod for Result<T, E> {
         }
     }
 
+    #[inline]
     fn encoded_len(value: &Self::In<'_>, limits: &[usize]) -> Result<usize, Error> {
         match value {
             Err(error) => Ok(1 + E::encoded_len(error, limits)?),
@@ -131,6 +141,7 @@ unsafe impl<T: ZeroPod, E: ZeroPod> ZeroPod for Result<T, E> {
         }
     }
 
+    #[inline]
     unsafe fn write(value: &Self::In<'_>, out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the encoding: the tag, then the value.
         unsafe {
@@ -148,6 +159,7 @@ unsafe impl<T: ZeroPod, E: ZeroPod> ZeroPod for Result<T, E> {
         }
     }
 
+    #[inline]
     fn max_len(limits: &[usize]) -> Option<usize> {
         Some(1 + T::max_len(limits)?.max(E::max_len(limits)?))
     }

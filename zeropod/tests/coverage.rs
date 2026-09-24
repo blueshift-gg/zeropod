@@ -34,8 +34,6 @@ enum Level {
 
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
 struct Everything {
-    single: f32,
-    double: f64,
     unit: (),
     marker: PhantomData<u8>,
     words: [u16; 3],
@@ -57,10 +55,7 @@ struct Everything {
 }
 
 fn everything() -> impl Strategy<Value = Everything> {
-    let number = || prop::num::f64::NORMAL | prop::num::f64::ZERO;
     let fixed = (
-        number().prop_map(|value| value as f32),
-        number(),
         any::<[u16; 3]>(),
         any::<[bool; 2]>(),
         any::<(u32, u64, i32, i32, bool)>(),
@@ -75,32 +70,28 @@ fn everything() -> impl Strategy<Value = Everything> {
         any::<(u16, Vec<u16>)>(),
         any::<Vec<u64>>(),
     );
-    (fixed, variable).prop_map(
-        |((single, double, words, flags, (boxed, balance, x, y, high)), variable)| {
-            let (outcome, tuple, names, seen, weights, tags, (first, rest), history) = variable;
-            Everything {
-                single,
-                double,
-                unit: (),
-                marker: PhantomData,
-                words,
-                flags,
-                boxed: Box::new(boxed),
-                balance: Lamports(balance),
-                point: Point(x, y),
-                level: if high { Level::High } else { Level::Low },
-                cache: 0,
-                outcome,
-                tuple,
-                names,
-                seen,
-                weights,
-                tags,
-                pair: Pair { first, rest },
-                history: history.into_iter().map(Lamports).collect(),
-            }
-        },
-    )
+    (fixed, variable).prop_map(|((words, flags, (boxed, balance, x, y, high)), variable)| {
+        let (outcome, tuple, names, seen, weights, tags, (first, rest), history) = variable;
+        Everything {
+            unit: (),
+            marker: PhantomData,
+            words,
+            flags,
+            boxed: Box::new(boxed),
+            balance: Lamports(balance),
+            point: Point(x, y),
+            level: if high { Level::High } else { Level::Low },
+            cache: 0,
+            outcome,
+            tuple,
+            names,
+            seen,
+            weights,
+            tags,
+            pair: Pair { first, rest },
+            history: history.into_iter().map(Lamports).collect(),
+        }
+    })
 }
 
 proptest! {
@@ -139,19 +130,8 @@ fn views_read_every_kind_in_place() {
     assert_eq!(view.pair().rest().iter().collect::<Vec<_>>(), [8, 9]);
 }
 
-#[test]
-fn a_nan_is_refused_as_borsh_refuses_it() {
-    let value = Everything {
-        double: f64::NAN,
-        ..everything_sample()
-    };
-    assert_eq!(zeropod::to_vec(&value), Err(zeropod::Error::InvalidFloat));
-}
-
 fn everything_sample() -> Everything {
     Everything {
-        single: 1.5,
-        double: -2.25,
         unit: (),
         marker: PhantomData,
         words: [1, 2, 3],

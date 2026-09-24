@@ -29,6 +29,7 @@ unsafe impl ZeroPod for String {
     where
         Self: 'a;
 
+    #[inline]
     fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
         let len = count(bytes)?;
         within(len, limits)?;
@@ -38,11 +39,13 @@ unsafe impl ZeroPod for String {
         Ok(4 + len)
     }
 
+    #[inline]
     unsafe fn len(bytes: &[u8]) -> usize {
         // SAFETY: a valid encoding starts with its count.
         4 + unsafe { count_unchecked(bytes) }
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> &str {
         // SAFETY: the count's bytes follow it, and are UTF-8.
         unsafe {
@@ -51,11 +54,13 @@ unsafe impl ZeroPod for String {
         }
     }
 
+    #[inline]
     fn encoded_len(value: &&str, limits: &[usize]) -> Result<usize, Error> {
         within(value.len(), limits)?;
         Ok(4 + value.len())
     }
 
+    #[inline]
     unsafe fn write(value: &&str, out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the count and the text.
         unsafe {
@@ -66,6 +71,7 @@ unsafe impl ZeroPod for String {
         4 + value.len()
     }
 
+    #[inline]
     fn max_len(limits: &[usize]) -> Option<usize> {
         limits.first().map(|limit| 4 + limit)
     }
@@ -91,6 +97,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
     where
         Self: 'a;
 
+    #[inline]
     fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
         let len = count(bytes)?;
         within(len, limits)?;
@@ -110,6 +117,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
         }
     }
 
+    #[inline]
     unsafe fn len(bytes: &[u8]) -> usize {
         // SAFETY: a valid encoding starts with its count, then its items.
         unsafe {
@@ -121,11 +129,13 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
         }
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> &Items<T> {
         // SAFETY: `Items` is a transparent `[u8]` holding a valid vector.
         unsafe { &*(bytes as *const [u8] as *const Items<T>) }
     }
 
+    #[inline]
     fn encoded_len(values: &&[T], limits: &[usize]) -> Result<usize, Error> {
         within(values.len(), limits)?;
         if let Some(size) = T::SIZE {
@@ -137,6 +147,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
         })
     }
 
+    #[inline]
     unsafe fn write(values: &&[T], out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the count and every item.
         unsafe {
@@ -154,6 +165,7 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
         }
     }
 
+    #[inline]
     fn max_len(limits: &[usize]) -> Option<usize> {
         let (len, inner) = limits.split_first()?;
         len.checked_mul(T::max_len(inner)?)?.checked_add(4)
@@ -269,29 +281,35 @@ unsafe impl<T: ZeroPod> ZeroPod for Box<T> {
     const SIZE: Option<usize> = T::SIZE;
     const ANY_BYTES: bool = T::ANY_BYTES;
 
+    #[inline]
     fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
         T::check(bytes, limits)
     }
 
+    #[inline]
     unsafe fn len(bytes: &[u8]) -> usize {
         // SAFETY: forwarded.
         unsafe { T::len(bytes) }
     }
 
+    #[inline]
     unsafe fn read(bytes: &[u8]) -> T::Ref<'_> {
         // SAFETY: forwarded.
         unsafe { T::read(bytes) }
     }
 
+    #[inline]
     fn encoded_len(value: &T::In<'_>, limits: &[usize]) -> Result<usize, Error> {
         T::encoded_len(value, limits)
     }
 
+    #[inline]
     unsafe fn write(value: &T::In<'_>, out: &mut [u8]) -> usize {
         // SAFETY: forwarded.
         unsafe { T::write(value, out) }
     }
 
+    #[inline]
     fn max_len(limits: &[usize]) -> Option<usize> {
         T::max_len(limits)
     }
@@ -321,26 +339,31 @@ macro_rules! collection {
             where
                 Self: 'a;
 
+            #[inline]
             fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
                 <Vec<$entry> as ZeroPod>::check(bytes, limits)
             }
 
+            #[inline]
             unsafe fn len(bytes: &[u8]) -> usize {
                 // SAFETY: forwarded.
                 unsafe { <Vec<$entry> as ZeroPod>::len(bytes) }
             }
 
+            #[inline]
             unsafe fn read(bytes: &[u8]) -> &Items<$entry> {
                 // SAFETY: forwarded.
                 unsafe { <Vec<$entry> as ZeroPod>::read(bytes) }
             }
 
+            #[inline]
             fn encoded_len($entries: &&$ty, limits: &[usize]) -> Result<usize, Error> {
                 within($entries.len(), limits)?;
                 let entry = |entry| <$entry>::encoded_len(&entry, &[]);
                 $entries.iter().map($pair).try_fold(4, |at, pair| Ok(at + entry(pair)?))
             }
 
+            #[inline]
             unsafe fn write($entries: &&$ty, out: &mut [u8]) -> usize {
                 // SAFETY: `out` holds the count and every entry.
                 unsafe {
@@ -351,6 +374,8 @@ macro_rules! collection {
                 }
             }
 
+
+            #[inline]
             fn max_len(limits: &[usize]) -> Option<usize> {
                 <Vec<$entry> as ZeroPod>::max_len(limits)
             }

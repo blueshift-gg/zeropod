@@ -1,5 +1,6 @@
 //! One account-like value in each library's derive: fixed fields first, then
-//! a string and a vector, as Solana programs store them.
+//! a string and a vector, as Solana programs store them. And its fixed
+//! fields alone, for the libraries that cast bytes to a struct.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use wincode::{SchemaRead, SchemaWrite};
@@ -35,5 +36,45 @@ pub fn account() -> Account {
         bump: 254,
         name: "treasury".into(),
         members: (0..10).map(|member| [member; 32]).collect(),
+    }
+}
+
+/// The fixed fields, which zeropod stores as Borsh does.
+#[derive(ZeroPod, BorshSerialize)]
+pub struct Fixed {
+    pub owner: [u8; 32],
+    pub amount: u64,
+    pub bump: u8,
+}
+
+/// The same bytes for bytemuck: packed, so no padding and alignment 1.
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[repr(C, packed)]
+pub struct FixedMuck {
+    pub owner: [u8; 32],
+    pub amount: u64,
+    pub bump: u8,
+}
+
+/// The same bytes for zerocopy, with its unaligned little-endian integer.
+#[derive(
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+    zerocopy::Unaligned,
+)]
+#[repr(C)]
+pub struct FixedCopy {
+    pub owner: [u8; 32],
+    pub amount: zerocopy::little_endian::U64,
+    pub bump: u8,
+}
+
+pub fn fixed() -> Fixed {
+    Fixed {
+        owner: [7; 32],
+        amount: 1_000_000,
+        bump: 254,
     }
 }
