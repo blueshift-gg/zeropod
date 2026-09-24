@@ -1,0 +1,21 @@
+[package]
+name = "bench"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+description = "zeropod against borsh and wincode, on the same values"
+
+[dependencies]
+borsh = { version = "1", features = ["derive"] }
+wincode = { version = "0.6", features = ["derive"] }
+zeropod = { path = "../zeropod" }
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "compare"
+harness = false
+
+[lints]
+workspace = true

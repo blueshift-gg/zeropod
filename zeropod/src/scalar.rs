@@ -42,6 +42,7 @@ macro_rules! number {
             type In<'a> = $ty;
             const SIZE: Option<usize> = Some(size_of::<$ty>());
             const ANY_BYTES: bool = true;
+            const NATIVE: bool = cfg!(target_endian = "little");
 
             #[inline(always)]
             fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
@@ -111,6 +112,7 @@ unsafe impl ZeroPod for bool {
     type Ref<'a> = bool;
     type In<'a> = bool;
     const SIZE: Option<usize> = Some(1);
+    const NATIVE: bool = true;
 
     #[inline(always)]
     fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
@@ -178,6 +180,7 @@ macro_rules! bytes {
             type In<'a> = $ty;
             const SIZE: Option<usize> = Some($len);
             const ANY_BYTES: bool = true;
+            const NATIVE: bool = true;
 
             #[inline(always)]
             fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {

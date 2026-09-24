@@ -135,6 +135,13 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
         // SAFETY: `out` holds the count and every item.
         unsafe {
             write_count(values.len(), out);
+            if T::NATIVE {
+                // A `T`'s bytes are its encoding: the items are one copy.
+                let len = size_of_val(*values);
+                let items = values.as_ptr().cast::<u8>();
+                core::ptr::copy_nonoverlapping(items, out.as_mut_ptr().add(4), len);
+                return 4 + len;
+            }
             values.iter().fold(4, |at, value| {
                 at + T::write(&value.input(), out.get_unchecked_mut(at..))
             })
@@ -151,6 +158,22 @@ unsafe impl<T: ZeroPod> ZeroPod for Vec<T> {
     }
 
     unsafe fn own(items: &Items<T>) -> Vec<T> {
+        if T::NATIVE {
+            let len = items.len();
+            let mut vec = Vec::<T>::with_capacity(len);
+            // SAFETY: the items are valid encodings, which are valid `T`s in
+            // memory, `size_of::<T>()` each; the vector has room for them.
+            unsafe {
+                let from = items.bytes.as_ptr().add(4);
+                core::ptr::copy_nonoverlapping(
+                    from,
+                    vec.as_mut_ptr().cast::<u8>(),
+                    len * size_of::<T>(),
+                );
+                vec.set_len(len);
+            }
+            return vec;
+        }
         // SAFETY: forwarded: each item came from `read`.
         items.iter().map(|item| unsafe { T::own(item) }).collect()
     }

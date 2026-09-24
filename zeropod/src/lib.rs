@@ -101,7 +101,8 @@ pub use zeropod_derive::ZeroPod;
 ///   accepts the result with the same `limits`.
 /// - `write` and `input` do not unwind.
 /// - `SIZE`, when set, is the length of every encoding; `ANY_BYTES`, when
-///   set, means every `SIZE` bytes are a valid encoding.
+///   set, means every `SIZE` bytes are a valid encoding; `NATIVE`, when set,
+///   means a value's bytes in memory are its encoding, `SIZE` long.
 /// - The safe methods are sound for any arguments.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be stored by zeropod",
@@ -125,6 +126,10 @@ pub unsafe trait ZeroPod: Sized {
     /// Whether every `SIZE` bytes are a valid encoding, so checking a run of
     /// them is checking its length.
     const ANY_BYTES: bool = false;
+
+    /// Whether a value's bytes in memory are its encoding, so a run of them
+    /// is written or read with one copy.
+    const NATIVE: bool = false;
 
     /// Checks that `bytes` start with a valid encoding within `limits`, the
     /// `#[max_len]` bounds from the outermost in, and returns its length.
