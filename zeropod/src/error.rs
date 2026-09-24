@@ -5,6 +5,8 @@ pub enum Error {
     TooShort,
     /// A `bool` byte other than 0 or 1.
     InvalidBool,
+    /// A NaN float, which Borsh does not store.
+    InvalidFloat,
     /// An `Option` tag other than 0 or 1, or an enum tag past its variants.
     InvalidTag,
     /// A string that is not UTF-8.
@@ -22,6 +24,7 @@ impl core::fmt::Display for Error {
         f.write_str(match self {
             Self::TooShort => "the bytes end before the encoding does",
             Self::InvalidBool => "a bool byte other than 0 or 1",
+            Self::InvalidFloat => "a NaN float",
             Self::InvalidTag => "an option or enum tag out of range",
             Self::InvalidUtf8 => "a string that is not UTF-8",
             Self::TooLong => "a string or vector past its maximum length",
@@ -32,3 +35,16 @@ impl core::fmt::Display for Error {
 }
 
 impl core::error::Error for Error {}
+
+#[cfg(feature = "solana-program-error")]
+impl From<Error> for solana_program_error::ProgramError {
+    fn from(error: Error) -> Self {
+        use solana_program_error::ProgramError;
+        match error {
+            // A value too long for its field: the caller's to fix.
+            Error::TooLong => ProgramError::InvalidArgument,
+            Error::NoRoom => ProgramError::AccountDataTooSmall,
+            _ => ProgramError::InvalidAccountData,
+        }
+    }
+}

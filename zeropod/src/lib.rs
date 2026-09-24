@@ -43,6 +43,18 @@
 //! capacity, so they are of fixed size, and a struct of fixed fields only has
 //! one size.
 //!
+//! # Your own types
+//!
+//! Derive `ZeroPod` on any struct or enum of storable fields, generic or
+//! not. A struct of one unnamed field is stored as that field: `struct
+//! Lamports(u64)` is a `u64` on the wire, and with `#[repr(transparent)]` a
+//! vector of them is copied whole. Borsh's `#[borsh(skip)]` and
+//! `#[borsh(use_discriminant = ..)]` mean what they mean to Borsh.
+//!
+//! A type the derive cannot express implements [`ZeroPod`] by hand: an
+//! `unsafe` trait, whose contract its documentation spells out, and whose
+//! implementations in this crate, one per wire type, are the examples.
+//!
 //! # Safety
 //!
 //! A view is a [`Bytes`], whose bytes only this crate can change, and only
@@ -65,15 +77,18 @@
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 mod array;
 mod bytes;
 mod count;
 mod error;
-mod option;
-mod scalar;
 #[cfg(feature = "alloc")]
-mod sequence;
+mod heap;
+mod scalar;
+mod tagged;
+mod tuple;
 
 #[doc(hidden)]
 pub mod __private;
@@ -81,10 +96,10 @@ pub mod __private;
 pub use array::{ArrayString, ArrayVec};
 pub use bytes::Bytes;
 pub use error::Error;
-pub use scalar::Plain;
 #[cfg(feature = "alloc")]
-pub use sequence::Items;
-pub use zerocopy::little_endian::{I16, I32, I64, I128, U16, U32, U64, U128};
+pub use heap::Items;
+pub use scalar::Plain;
+pub use zerocopy::little_endian::{F32, F64, I16, I32, I64, I128, U16, U32, U64, U128};
 pub use zeropod_derive::ZeroPod;
 
 /// A type stored in Borsh's encoding and read in place.
@@ -165,12 +180,9 @@ pub unsafe trait ZeroPod: Sized {
     /// The value as a view would write it.
     fn input(&self) -> Self::In<'_>;
 
-    /// The owned value of what a view read.
-    ///
-    /// # Safety
-    ///
-    /// `value` came from [`read`](Self::read).
-    unsafe fn own(value: Self::Ref<'_>) -> Self;
+    /// The owned value of what a view read. Sound for any argument, which a
+    /// caller may build itself: an enum's `Ref`, say.
+    fn own(value: Self::Ref<'_>) -> Self;
 }
 
 /// A struct deriving [`ZeroPod`], read and written through its view.
@@ -251,6 +263,6 @@ pub fn from_slice<T: ZeroPod>(bytes: &[u8]) -> Result<T, Error> {
     if T::check(bytes, &[])? != bytes.len() {
         return Err(Error::TrailingBytes);
     }
-    // SAFETY: `bytes` are a valid encoding, and `own` gets what `read` read.
-    Ok(unsafe { T::own(T::read(bytes)) })
+    // SAFETY: `bytes` are a valid encoding.
+    Ok(T::own(unsafe { T::read(bytes) }))
 }

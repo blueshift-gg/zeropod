@@ -8,14 +8,19 @@ description = "Borsh's encoding, read and written in place: zero-copy views of s
 
 [features]
 default = ["alloc"]
-# `String`, `Vec`, and the owned `to_vec` / `from_slice`.
+# `String`, `Vec`, `Box`, B-tree maps and sets, and `to_vec`.
 alloc = []
+# Hash maps and sets.
+std = ["alloc"]
 solana-address = ["dep:solana-address"]
+# `From<Error> for ProgramError`, which only this crate can write.
+solana-program-error = ["dep:solana-program-error"]
 
 [dependencies]
 zeropod-derive.workspace = true
 zerocopy = { version = "0.8", default-features = false }
 solana-address = { version = ">= 2.2, < 3", optional = true, default-features = false, features = ["copy"] }
+solana-program-error = { version = ">= 2, < 4", optional = true, default-features = false }
 
 [dev-dependencies]
 borsh = { version = "1", features = ["derive"] }

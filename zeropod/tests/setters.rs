@@ -90,3 +90,17 @@ pub fn sample() -> Profile {
         role: common::Role::Member { since: 9 },
     }
 }
+
+#[test]
+fn a_nested_value_is_changed_through_its_owned_copy() {
+    let mut bytes = zeropod::to_vec(&sample()).unwrap();
+    bytes.resize(ROOM, 0);
+    let view = Profile::view_mut(&mut bytes).unwrap();
+
+    let mut stats = view.stats().to_owned();
+    stats.wins += 1;
+    view.set_stats(&stats).unwrap();
+
+    assert_eq!(view.stats().wins(), 7);
+    assert_eq!(view.to_owned(), Profile { stats, ..sample() });
+}

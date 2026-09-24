@@ -45,3 +45,15 @@ fn writes_keep_every_field_in_place() {
     };
     assert_eq!(bytes, zeropod::to_vec(&expected).unwrap());
 }
+
+#[derive(ZeroPod, Debug)]
+enum Label {
+    Short(ArrayString<2>),
+}
+
+/// A `Ref` anyone can build: owning it checks the capacity, not trusts it.
+#[test]
+#[should_panic(expected = "fits its capacity")]
+fn owning_a_string_past_its_capacity_panics_rather_than_overflows() {
+    LabelRef::Short("too long").to_owned();
+}

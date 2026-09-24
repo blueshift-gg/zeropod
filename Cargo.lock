@@ -782,6 +782,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39c93e262f671bf402e1040e4a7e40b05d81da5956c7681948c975a0997517bb"
 
 [[package]]
+name = "solana-program-error"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f04fa578707b3612b095f0c8e19b66a1233f7c42ca8082fcb3b745afcc0add6"
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1090,6 +1096,7 @@ dependencies = [
  "borsh",
  "proptest",
  "solana-address",
+ "solana-program-error",
  "zerocopy",
  "zeropod-derive",
 ]

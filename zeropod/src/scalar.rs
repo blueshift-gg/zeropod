@@ -1,4 +1,6 @@
-//! Numbers, `bool`, byte arrays and addresses: one length each.
+//! Numbers, `bool`, `()`, `PhantomData` and addresses: one length each.
+
+use core::marker::PhantomData;
 
 use crate::{Error, ZeroPod};
 
@@ -33,20 +35,25 @@ fn fits<const N: usize>(bytes: &[u8]) -> Result<usize, Error> {
     }
 }
 
+/// Little-endian numbers. `valid` rejects the values Borsh rejects: NaN.
 macro_rules! number {
-    ($($ty:ty => $stored:ty),* $(,)?) => {$(
-        // SAFETY: `check` accepts exactly `SIZE` bytes, all of which are a
-        // valid number, and `read` and `write` use exactly those.
+    ($($ty:ty => $stored:ty, $any_bytes:expr, $valid:expr);* $(;)?) => {$(
+        // SAFETY: `check` accepts `SIZE` bytes holding a value `valid`
+        // accepts, and `read` and `write` use exactly those.
         unsafe impl ZeroPod for $ty {
             type Ref<'a> = $ty;
             type In<'a> = $ty;
             const SIZE: Option<usize> = Some(size_of::<$ty>());
-            const ANY_BYTES: bool = true;
+            const ANY_BYTES: bool = $any_bytes;
             const NATIVE: bool = cfg!(target_endian = "little");
 
             #[inline(always)]
             fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
-                fits::<{ size_of::<$ty>() }>(bytes)
+                let size = fits::<{ size_of::<$ty>() }>(bytes)?;
+                let valid: fn(&$ty) -> bool = $valid;
+                // SAFETY: the bytes hold the number.
+                let value = unsafe { Self::read(bytes) };
+                if valid(&value) { Ok(size) } else { Err(Error::InvalidFloat) }
             }
 
             #[inline(always)]
@@ -62,8 +69,9 @@ macro_rules! number {
             }
 
             #[inline(always)]
-            fn encoded_len(_: &$ty, _: &[usize]) -> Result<usize, Error> {
-                Ok(size_of::<$ty>())
+            fn encoded_len(value: &$ty, _: &[usize]) -> Result<usize, Error> {
+                let valid: fn(&$ty) -> bool = $valid;
+                if valid(value) { Ok(size_of::<$ty>()) } else { Err(Error::InvalidFloat) }
             }
 
             #[inline(always)]
@@ -82,13 +90,13 @@ macro_rules! number {
                 *self
             }
 
-            unsafe fn own(value: $ty) -> $ty {
+            fn own(value: $ty) -> $ty {
                 value
             }
         }
 
         // SAFETY: the stored form is the little-endian bytes, of alignment 1,
-        // and every one of them is a valid number.
+        // and `check` accepts exactly the valid values.
         unsafe impl Plain for $ty {
             type Stored = $stored;
 
@@ -101,9 +109,18 @@ macro_rules! number {
 }
 
 number!(
-    u8 => u8, i8 => i8,
-    u16 => crate::U16, u32 => crate::U32, u64 => crate::U64, u128 => crate::U128,
-    i16 => crate::I16, i32 => crate::I32, i64 => crate::I64, i128 => crate::I128,
+    u8 => u8, true, |_| true;
+    i8 => i8, true, |_| true;
+    u16 => crate::U16, true, |_| true;
+    u32 => crate::U32, true, |_| true;
+    u64 => crate::U64, true, |_| true;
+    u128 => crate::U128, true, |_| true;
+    i16 => crate::I16, true, |_| true;
+    i32 => crate::I32, true, |_| true;
+    i64 => crate::I64, true, |_| true;
+    i128 => crate::I128, true, |_| true;
+    f32 => crate::F32, false, |value| !value.is_nan();
+    f64 => crate::F64, false, |value| !value.is_nan();
 );
 
 // SAFETY: `check` accepts one byte, 0 or 1, which is a valid `bool`, and
@@ -154,7 +171,7 @@ unsafe impl ZeroPod for bool {
         *self
     }
 
-    unsafe fn own(value: bool) -> bool {
+    fn own(value: bool) -> bool {
         value
     }
 }
@@ -169,74 +186,56 @@ unsafe impl Plain for bool {
     }
 }
 
-/// Bytes of one length, borrowed in place: `[u8; N]` and, with the
-/// `solana-address` feature, `Address`.
-macro_rules! bytes {
-    ($([$($generics:tt)*] $ty:ty, $len:expr);* $(;)?) => {$(
-        // SAFETY: `check` accepts `SIZE` bytes, all valid, and `read` and
-        // `write` use exactly those.
+/// Types of no bytes, which generic types hold: `()` and `PhantomData<T>`.
+macro_rules! nothing {
+    ($([$($generics:tt)*] $ty:ty => $value:expr);* $(;)?) => {$(
+        // SAFETY: the encoding is empty, and every method agrees.
         unsafe impl<$($generics)*> ZeroPod for $ty {
-            type Ref<'a> = &'a $ty;
-            type In<'a> = $ty;
-            const SIZE: Option<usize> = Some($len);
+            type Ref<'a> = $ty where Self: 'a;
+            type In<'a> = $ty where Self: 'a;
+            const SIZE: Option<usize> = Some(0);
             const ANY_BYTES: bool = true;
             const NATIVE: bool = true;
 
-            #[inline(always)]
-            fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
-                fits::<{ $len }>(bytes)
+            fn check(_: &[u8], _: &[usize]) -> Result<usize, Error> {
+                Ok(0)
             }
 
-            #[inline(always)]
             unsafe fn len(_: &[u8]) -> usize {
-                $len
+                0
             }
 
-            #[inline(always)]
-            unsafe fn read(bytes: &[u8]) -> &$ty {
-                // SAFETY: the bytes are there, and the type is a transparent
-                // byte array: alignment 1, every byte valid.
-                unsafe { &*bytes.as_ptr().cast::<$ty>() }
+            unsafe fn read(_: &[u8]) -> $ty {
+                $value
             }
 
-            #[inline(always)]
             fn encoded_len(_: &$ty, _: &[usize]) -> Result<usize, Error> {
-                Ok($len)
+                Ok(0)
             }
 
-            #[inline(always)]
-            unsafe fn write(value: &$ty, out: &mut [u8]) -> usize {
-                // SAFETY: as in `read`; `out` holds the bytes.
-                unsafe { out.as_mut_ptr().cast::<$ty>().write(*value) };
-                $len
+            unsafe fn write(_: &$ty, _: &mut [u8]) -> usize {
+                0
             }
 
             fn max_len(_: &[usize]) -> Option<usize> {
-                Some($len)
+                Some(0)
             }
 
             fn input(&self) -> $ty {
-                *self
+                $value
             }
 
-            unsafe fn own(value: &$ty) -> $ty {
-                *value
-            }
-        }
-
-        // SAFETY: a transparent byte array: alignment 1, size `SIZE`, every
-        // byte valid.
-        unsafe impl<$($generics)*> Plain for $ty {
-            type Stored = $ty;
-
-            fn from_stored(stored: &$ty) -> $ty {
-                *stored
+            fn own(value: $ty) -> $ty {
+                value
             }
         }
     )*};
 }
 
-bytes!([const N: usize] [u8; N], N);
+nothing!(
+    [] () => ();
+    [T: ?Sized] PhantomData<T> => PhantomData;
+);
 
 // `Address` is a transparent `[u8; 32]`.
 #[cfg(feature = "solana-address")]
@@ -245,4 +244,67 @@ const _: () = assert!(
 );
 
 #[cfg(feature = "solana-address")]
-bytes!([] solana_address::Address, 32);
+// SAFETY: `check` accepts 32 bytes, every one of them a valid address, and
+// `read` and `write` use exactly those.
+unsafe impl ZeroPod for solana_address::Address {
+    type Ref<'a> = &'a solana_address::Address;
+    type In<'a> = solana_address::Address;
+    const SIZE: Option<usize> = Some(32);
+    const ANY_BYTES: bool = true;
+    const NATIVE: bool = true;
+
+    #[inline(always)]
+    fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
+        fits::<32>(bytes)
+    }
+
+    #[inline(always)]
+    unsafe fn len(_: &[u8]) -> usize {
+        32
+    }
+
+    #[inline(always)]
+    unsafe fn read(bytes: &[u8]) -> &solana_address::Address {
+        // SAFETY: the 32 bytes are there, and an address is a transparent
+        // `[u8; 32]`: alignment 1, every byte valid.
+        unsafe { &*bytes.as_ptr().cast() }
+    }
+
+    #[inline(always)]
+    fn encoded_len(_: &solana_address::Address, _: &[usize]) -> Result<usize, Error> {
+        Ok(32)
+    }
+
+    #[inline(always)]
+    unsafe fn write(value: &solana_address::Address, out: &mut [u8]) -> usize {
+        // SAFETY: as in `read`; `out` holds the 32 bytes.
+        unsafe {
+            out.as_mut_ptr()
+                .cast::<solana_address::Address>()
+                .write(*value)
+        };
+        32
+    }
+
+    fn max_len(_: &[usize]) -> Option<usize> {
+        Some(32)
+    }
+
+    fn input(&self) -> solana_address::Address {
+        *self
+    }
+
+    fn own(value: &solana_address::Address) -> solana_address::Address {
+        *value
+    }
+}
+
+#[cfg(feature = "solana-address")]
+// SAFETY: a transparent `[u8; 32]`: alignment 1, size 32, every byte valid.
+unsafe impl Plain for solana_address::Address {
+    type Stored = solana_address::Address;
+
+    fn from_stored(stored: &solana_address::Address) -> solana_address::Address {
+        *stored
+    }
+}

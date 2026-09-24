@@ -20,8 +20,16 @@ pub enum Status {
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
 pub enum Role {
     Admin,
-    Member { since: i64 },
+    Member {
+        since: i64,
+    },
     Custom(#[max_len(16)] String),
+    /// A fixed field after a variable one: fine in a variant.
+    Named {
+        #[max_len(8)]
+        name: String,
+        rank: u8,
+    },
 }
 
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
@@ -60,6 +68,7 @@ pub fn profile() -> impl Strategy<Value = Profile> {
             Just(Role::Admin),
             any::<i64>().prop_map(|since| Role::Member { since }),
             "[a-z]{0,16}".prop_map(Role::Custom),
+            ("[a-z]{0,8}", any::<u8>()).prop_map(|(name, rank)| Role::Named { name, rank }),
         ],
     );
     (fixed, variable).prop_map(

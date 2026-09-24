@@ -1,6 +1,6 @@
-//! `ArrayString<N>` and `ArrayVec<T, N>`: a count, then room for `N` bytes
-//! or items, full or not. Of fixed size, so a struct of them has every field
-//! at an offset known when compiling.
+//! Arrays: `[T; N]`, `N` items; and `ArrayString<N>` and `ArrayVec<T, N>`, a
+//! count then room for `N` bytes or items, full or not. All of fixed size,
+//! so a struct of them has every field at an offset known when compiling.
 
 use core::ops::Deref;
 
@@ -9,6 +9,81 @@ use crate::{
     count::{count, count_unchecked, within, write_count},
     scalar::item_size,
 };
+
+// SAFETY: `check` accepts `N` items `T` accepts; `read` views them in
+// place as `Stored`s, and `write` writes each.
+unsafe impl<T: Plain, const N: usize> ZeroPod for [T; N] {
+    type Ref<'a>
+        = &'a [T::Stored; N]
+    where
+        Self: 'a;
+    type In<'a>
+        = [T; N]
+    where
+        Self: 'a;
+    const SIZE: Option<usize> = Some(N * item_size::<T>());
+    const ANY_BYTES: bool = T::ANY_BYTES;
+    const NATIVE: bool = T::NATIVE;
+
+    fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
+        let size = item_size::<T>();
+        let items = bytes.get(..N * size).ok_or(Error::TooShort)?;
+        if !T::ANY_BYTES {
+            for item in items.chunks_exact(size.max(1)) {
+                T::check(item, &[])?;
+            }
+        }
+        Ok(N * size)
+    }
+
+    unsafe fn len(_: &[u8]) -> usize {
+        N * item_size::<T>()
+    }
+
+    unsafe fn read(bytes: &[u8]) -> &[T::Stored; N] {
+        // SAFETY: the `N` items are there, each a valid `Stored` of
+        // alignment 1.
+        unsafe { &*bytes.as_ptr().cast() }
+    }
+
+    fn encoded_len(values: &[T; N], _: &[usize]) -> Result<usize, Error> {
+        values
+            .iter()
+            .try_for_each(|value| T::encoded_len(&value.input(), &[]).map(drop))?;
+        Ok(N * item_size::<T>())
+    }
+
+    unsafe fn write(values: &[T; N], out: &mut [u8]) -> usize {
+        // SAFETY: `out` holds the `N` items.
+        unsafe {
+            values.iter().fold(0, |at, value| {
+                at + T::write(&value.input(), out.get_unchecked_mut(at..))
+            })
+        }
+    }
+
+    fn max_len(_: &[usize]) -> Option<usize> {
+        Some(N * item_size::<T>())
+    }
+
+    fn input(&self) -> [T; N] {
+        *self
+    }
+
+    fn own(items: &[T::Stored; N]) -> [T; N] {
+        items.map(|item| T::from_stored(&item))
+    }
+}
+
+// SAFETY: the items' stored forms, back to back: alignment 1, size `SIZE`,
+// and valid exactly when each item is.
+unsafe impl<T: Plain, const N: usize> Plain for [T; N] {
+    type Stored = [T::Stored; N];
+
+    fn from_stored(stored: &[T::Stored; N]) -> [T; N] {
+        stored.map(|item| T::from_stored(&item))
+    }
+}
 
 /// A string of at most `N` bytes, stored at full capacity.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,12 +204,8 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
         self
     }
 
-    unsafe fn own(value: &str) -> Self {
-        let mut string = Self::new();
-        // SAFETY: a stored value fits `N` bytes.
-        unsafe { string.bytes.get_unchecked_mut(..value.len()) }.copy_from_slice(value.as_bytes());
-        string.len = value.len();
-        string
+    fn own(value: &str) -> Self {
+        Self::try_from(value).expect("a string read in place fits its capacity")
     }
 }
 
@@ -271,7 +342,8 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         self
     }
 
-    unsafe fn own(items: &[T::Stored]) -> Self {
+    fn own(items: &[T::Stored]) -> Self {
+        assert!(items.len() <= N, "items read in place fit their capacity");
         let mut vec = Self::new();
         for (slot, item) in vec.items.iter_mut().zip(items) {
             *slot = T::from_stored(item);
