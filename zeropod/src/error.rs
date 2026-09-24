@@ -1,39 +1,34 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZeroPodError {
-    BufferTooSmall,
-    Overflow,
+/// Why bytes are not a valid encoding, or a value cannot be written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The bytes end before the encoding does.
+    TooShort,
+    /// A `bool` byte other than 0 or 1.
     InvalidBool,
+    /// An `Option` tag other than 0 or 1, or an enum tag past its variants.
     InvalidTag,
-    InvalidDiscriminant,
-    InvalidLength,
+    /// A string that is not UTF-8.
     InvalidUtf8,
+    /// A string or vector longer than its `#[max_len]` or capacity.
+    TooLong,
+    /// No room left in the view for a field to grow into.
+    NoRoom,
+    /// Bytes left over after the encoding, for `from_slice`.
+    TrailingBytes,
 }
 
-impl core::fmt::Display for ZeroPodError {
+impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::BufferTooSmall => write!(f, "buffer too small"),
-            Self::Overflow => write!(f, "field value exceeds max capacity"),
-            Self::InvalidBool => write!(f, "invalid bool: byte must be 0 or 1"),
-            Self::InvalidTag => write!(f, "invalid option tag: byte must be 0 or 1"),
-            Self::InvalidDiscriminant => write!(f, "invalid enum discriminant"),
-            Self::InvalidLength => write!(f, "stored length exceeds capacity"),
-            Self::InvalidUtf8 => write!(f, "invalid UTF-8 in string field"),
-        }
+        f.write_str(match self {
+            Self::TooShort => "the bytes end before the encoding does",
+            Self::InvalidBool => "a bool byte other than 0 or 1",
+            Self::InvalidTag => "an option or enum tag out of range",
+            Self::InvalidUtf8 => "a string that is not UTF-8",
+            Self::TooLong => "a string or vector past its maximum length",
+            Self::NoRoom => "no room for a field to grow into",
+            Self::TrailingBytes => "bytes left after the encoding",
+        })
     }
 }
 
-#[cfg(feature = "solana-program-error")]
-impl From<ZeroPodError> for solana_program_error::ProgramError {
-    fn from(e: ZeroPodError) -> Self {
-        match e {
-            ZeroPodError::BufferTooSmall => solana_program_error::ProgramError::AccountDataTooSmall,
-            ZeroPodError::InvalidLength
-            | ZeroPodError::InvalidBool
-            | ZeroPodError::InvalidTag
-            | ZeroPodError::InvalidDiscriminant
-            | ZeroPodError::InvalidUtf8
-            | ZeroPodError::Overflow => solana_program_error::ProgramError::InvalidAccountData,
-        }
-    }
-}
+impl core::error::Error for Error {}

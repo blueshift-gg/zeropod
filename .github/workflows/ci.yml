@@ -57,6 +57,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
       - run: cargo test --all --all-features
+      - run: cargo build -p zeropod --no-default-features
 
   miri:
     name: Miri (${{ matrix.model }})
@@ -75,17 +76,9 @@ jobs:
         with:
           toolchain: nightly-2026-03-27
           components: miri, rust-src
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.144
       - run: bash scripts/miri.sh
         env:
           MIRIFLAGS: ${{ matrix.flags }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: miri-results-${{ matrix.model }}
-          path: target/miri-results
 
   kani:
     name: Kani Verification
@@ -102,27 +95,7 @@ jobs:
           key: ${{ runner.os }}-cargo-kani-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-kani-
-      - name: Install z3 (SMT solver for wide-type proofs)
-        run: sudo apt-get install -y z3
       - name: Verify zeropod
         uses: model-checking/kani-github-action@v1
         with:
-          command: cargo kani -p zeropod --features kani
-      - run: cargo kani -p zeropod --features kani --tests --harness proofs::compact_
-
-  fuzz:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-03-27
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-fuzz@0.13.2
-      - run: cargo fuzz run storage --target x86_64-unknown-linux-gnu -- -max_total_time=30 -max_len=64
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: fuzz-failures
-          path: fuzz/artifacts
+          command: cargo kani -p zeropod

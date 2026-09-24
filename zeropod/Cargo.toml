@@ -4,24 +4,23 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Zero-copy pod types with derive macros. Alignment-1 representations for zero-overhead data access."
+description = "Borsh's encoding, read and written in place: zero-copy views of structs, strings, vectors, options and enums."
 
 [features]
-default = []
-kani = []
-wincode = ["dep:wincode"]
+default = ["alloc"]
+# `String`, `Vec`, and the owned `to_vec` / `from_slice`.
+alloc = []
 solana-address = ["dep:solana-address"]
-solana-program-error = ["dep:solana-program-error"]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [dependencies]
-zeropod-derive = { workspace = true }
-wincode = { version = "0.5.5", default-features = false, features = [
-    "derive",
-], optional = true }
-solana-address = { version = ">= 2.2, <2.7", optional = true, features = [
-    "copy",
-] }
-solana-program-error = { version = ">=1.0, <4.0", optional = true }
+zeropod-derive.workspace = true
+zerocopy = { version = "0.8", default-features = false }
+solana-address = { version = ">= 2.2, < 3", optional = true, default-features = false, features = ["copy"] }
+
+[dev-dependencies]
+borsh = { version = "1", features = ["derive"] }
+proptest = "1"
+solana-address = { version = ">= 2.2, < 3", default-features = false, features = ["copy"] }
+
+[lints]
+workspace = true
