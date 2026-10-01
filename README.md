@@ -102,6 +102,11 @@ out.
 - `std`: hash maps and sets.
 - `solana-address`: `Address` fields.
 - `solana-program-error`: `?` from `zeropod::Error` into `ProgramError`.
+- `wincode`: for a type shared with code that speaks wincode. Derive
+  `SchemaWrite` and `SchemaRead` beside `ZeroPod`, and under
+  `zeropod::wincode::CONFIG` wincode writes and reads zeropod's bytes,
+  zeropod's own types included. `Result` and hash maps differ: wincode swaps
+  the first's tags and does not sort the second.
 
 `#[zeropod(crate = path)]` points the derive at a crate that re-exports
 zeropod, for frameworks built on it.

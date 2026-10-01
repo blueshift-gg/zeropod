@@ -6,18 +6,21 @@ use proptest::prelude::*;
 use zeropod::ZeroPod;
 
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wincode", derive(wincode::SchemaRead, wincode::SchemaWrite))]
 pub struct Stats {
     pub wins: u16,
     pub active: bool,
 }
 
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wincode", derive(wincode::SchemaRead, wincode::SchemaWrite))]
 pub enum Status {
     Idle,
     Busy,
 }
 
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wincode", derive(wincode::SchemaRead, wincode::SchemaWrite))]
 pub enum Role {
     Admin,
     Member {
@@ -33,6 +36,7 @@ pub enum Role {
 }
 
 #[derive(ZeroPod, BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wincode", derive(wincode::SchemaRead, wincode::SchemaWrite))]
 pub struct Profile {
     pub level: u8,
     pub delta: i16,

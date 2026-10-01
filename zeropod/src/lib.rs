@@ -91,6 +91,8 @@ mod heap;
 mod scalar;
 mod tagged;
 mod tuple;
+#[cfg(feature = "wincode")]
+pub mod wincode;
 
 #[doc(hidden)]
 pub mod __private;

@@ -13,6 +13,9 @@ alloc = []
 # Hash maps and sets.
 std = ["alloc"]
 solana-address = ["dep:solana-address"]
+# `SchemaWrite` and `SchemaRead` for zeropod's own types, and the
+# configuration in which wincode writes zeropod's bytes.
+wincode = ["dep:wincode", "alloc"]
 # `From<Error> for ProgramError`, which only this crate can write.
 solana-program-error = ["dep:solana-program-error"]
 
@@ -21,10 +24,12 @@ zeropod-derive.workspace = true
 zerocopy = { version = "0.8", default-features = false }
 solana-address = { version = ">= 2.2, < 3", optional = true, default-features = false, features = ["copy"] }
 solana-program-error = { version = ">= 2, < 4", optional = true, default-features = false }
+wincode = { version = "0.6", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 borsh = { version = "1", features = ["derive"] }
 proptest = "1"
+wincode = { version = "0.6", features = ["derive"] }
 solana-address = { version = ">= 2.2, < 3", default-features = false, features = ["copy"] }
 
 [lints]

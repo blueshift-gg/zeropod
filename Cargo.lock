@@ -1119,6 +1119,7 @@ dependencies = [
  "proptest",
  "solana-address",
  "solana-program-error",
+ "wincode",
  "zerocopy",
  "zeropod-derive",
 ]
