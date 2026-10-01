@@ -6,7 +6,7 @@ use core::ops::Deref;
 
 use crate::{
     Error, Plain, ZeroPod,
-    count::{count, count_unchecked, within, write_count},
+    count::{Prefix, within},
     scalar::item_size,
 };
 
@@ -163,7 +163,7 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
 
     #[inline]
     fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
-        let len = count(bytes)?;
+        let len = u32::count(bytes)?;
         if len > N {
             return Err(Error::TooLong);
         }
@@ -183,14 +183,14 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
     unsafe fn read(bytes: &[u8]) -> &str {
         // SAFETY: the count's bytes follow it, and are UTF-8.
         unsafe {
-            let len = count_unchecked(bytes);
+            let len = u32::count_unchecked(bytes);
             core::str::from_utf8_unchecked(bytes.get_unchecked(4..4 + len))
         }
     }
 
     #[inline]
     fn encoded_len(value: &&str, _: &[usize]) -> Result<usize, Error> {
-        within(value.len(), &[N])?;
+        within::<u32>(value.len(), &[N])?;
         Ok(4 + N)
     }
 
@@ -198,7 +198,7 @@ unsafe impl<const N: usize> ZeroPod for ArrayString<N> {
     unsafe fn write(value: &&str, out: &mut [u8]) -> usize {
         // SAFETY: `out` holds the count and `N` bytes, and the text fits them.
         unsafe {
-            write_count(value.len(), out);
+            u32::write_count(value.len(), out);
             let room = out.get_unchecked_mut(4..4 + N);
             room.get_unchecked_mut(..value.len())
                 .copy_from_slice(value.as_bytes());
@@ -300,7 +300,7 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
 
     #[inline]
     fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
-        let len = count(bytes)?;
+        let len = u32::count(bytes)?;
         if len > N {
             return Err(Error::TooLong);
         }
@@ -325,14 +325,14 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         // SAFETY: the count's items follow it, each a valid `Stored` of
         // alignment 1 and size `SIZE`.
         unsafe {
-            let len = count_unchecked(bytes);
+            let len = u32::count_unchecked(bytes);
             core::slice::from_raw_parts(bytes.as_ptr().add(4).cast(), len)
         }
     }
 
     #[inline]
     fn encoded_len(values: &&[T], _: &[usize]) -> Result<usize, Error> {
-        within(values.len(), &[N])?;
+        within::<u32>(values.len(), &[N])?;
         Ok(4 + N * item_size::<T>())
     }
 
@@ -341,7 +341,7 @@ unsafe impl<T: Plain + Default, const N: usize> ZeroPod for ArrayVec<T, N> {
         let size = item_size::<T>();
         // SAFETY: `out` holds the count and `N` items, and the values fit them.
         unsafe {
-            write_count(values.len(), out);
+            u32::write_count(values.len(), out);
             let mut at = 4;
             for value in *values {
                 at += T::write(&value.input(), out.get_unchecked_mut(at..));

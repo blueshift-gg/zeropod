@@ -59,6 +59,7 @@ let used = view.size();
 | a derived struct, generic or not | its fields in order; one unnamed field is stored as that field |
 | a derived enum | a one-byte tag (the variant's index, or its written discriminant), then that variant's fields |
 | `ArrayString<N>`, `ArrayVec<T, N>` | a `u32` count, then room for `N`: always the same size |
+| `SmallStr<u8>`, `SmallStr<u16>`, `SmallVec<T, u8>`, `SmallVec<T, u16>` | a `u8` or `u16` count, then the bytes or items |
 
 Reading in place gives each field's natural form: numbers by value; `&str`,
 `&[U64]` and other slices; `&Items<T>` to iterate strings, tuples or map
@@ -72,6 +73,9 @@ Fields of fixed size come first, and fields whose size varies come last, so
 every fixed field is at an offset known when compiling. `ArrayString` and
 `ArrayVec` trade Borsh compatibility for a fixed size: a struct of fixed
 fields only has one size, and writing it never moves anything.
+`SmallStr` and `SmallVec` trade it for a shorter count: a `String` or a `Vec`
+of at most 255 or 65,535 bytes or items, made with `.into()` and used as
+the type it wraps.
 
 ## Safety
 

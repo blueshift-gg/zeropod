@@ -42,6 +42,8 @@
 //! [`ArrayString`] and [`ArrayVec`] store a string or a vector at full
 //! capacity, so they are of fixed size, and a struct of fixed fields only has
 //! one size.
+//! [`SmallStr`] and [`SmallVec`] are a `String` and a `Vec` after a `u8` or
+//! a `u16` count instead of Borsh's `u32`.
 //!
 //! # Your own types
 //!
@@ -95,9 +97,10 @@ pub mod __private;
 
 pub use array::{ArrayString, ArrayVec};
 pub use bytes::Bytes;
+pub use count::Prefix;
 pub use error::Error;
 #[cfg(feature = "alloc")]
-pub use heap::Items;
+pub use heap::{Items, SmallStr, SmallVec};
 pub use scalar::Plain;
 pub use zerocopy::little_endian::{I16, I32, I64, I128, U16, U32, U64, U128};
 pub use zeropod_derive::ZeroPod;

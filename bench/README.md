@@ -19,16 +19,16 @@ Apple M-series, Rust 1.92, criterion medians:
 
 | | borsh | wincode | zeropod |
 |---|---:|---:|---:|
-| encode | 45.3 ns | 6.5 ns | 6.7 ns |
-| decode | 81.7 ns | 56.9 ns | 58.8 ns |
-| read_last_field | 79.6 ns | 4.7 ns | 5.9 ns |
-| update_fixed_field | 129.1 ns | 61.7 ns | 6.6 ns |
-| update_variable_field | 143.0 ns | 87.6 ns | 14.3 ns |
+| encode | 40.9 ns | 6.2 ns | 6.9 ns |
+| decode | 76.6 ns | 52.5 ns | 51.8 ns |
+| read_last_field | 77.4 ns | 4.4 ns | 5.5 ns |
+| update_fixed_field | 118.2 ns | 58.7 ns | 5.9 ns |
+| update_variable_field | 136.3 ns | 77.1 ns | 14.0 ns |
 
 | | bytemuck | zerocopy | zeropod |
 |---|---:|---:|---:|
-| fixed_read | 0.38 ns | 0.42 ns | 0.78 ns |
-| fixed_update | 1.13 ns | 1.01 ns | 1.28 ns |
+| fixed_read | 0.41 ns | 0.40 ns | 0.38 ns |
+| fixed_update | 1.07 ns | 0.99 ns | 0.75 ns |
 
 Below a nanosecond the loop decides the number: compiled on their own, the
 bytemuck and zeropod reads are the same four instructions, a length compare
