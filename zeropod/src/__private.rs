@@ -108,7 +108,7 @@ pub unsafe fn replace<T: ZeroPod>(
     let total = total();
     // SAFETY: a `T` starts at `at`.
     let old = unsafe { T::len(from_unchecked(bytes, at)) };
-    let end = total - old + new;
+    let end = (total - old).checked_add(new).ok_or(Error::NoRoom)?;
     if end > bytes.len() {
         return Err(Error::NoRoom);
     }

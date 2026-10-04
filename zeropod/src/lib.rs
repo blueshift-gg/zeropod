@@ -85,6 +85,7 @@ extern crate std;
 mod array;
 mod bytes;
 mod count;
+mod edit;
 mod error;
 #[cfg(feature = "alloc")]
 mod heap;
@@ -97,9 +98,10 @@ pub mod wincode;
 #[doc(hidden)]
 pub mod __private;
 
-pub use array::{ArrayString, ArrayVec};
+pub use array::{Array, ArrayString, ArrayVec};
 pub use bytes::Bytes;
 pub use count::Prefix;
+pub use edit::{Edit, EditFields};
 pub use error::Error;
 #[cfg(feature = "alloc")]
 pub use heap::{Items, SmallStr, SmallVec};

@@ -284,6 +284,14 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
     let (name, vis) = (&input.ident, &input.vis);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let view = format_ident!("{name}View");
+    let editor = format_ident!("{name}Edit");
+    let mut editor_generics = generics.clone();
+    editor_generics.params.insert(0, parse_quote!('__zeropod));
+    let (editor_impl, editor_args, editor_where) = editor_generics.split_for_impl();
+    let mut editor_ref_generics = generics.clone();
+    editor_ref_generics.params.insert(0, parse_quote!('a));
+    let (_, editor_ref_args, _) = editor_ref_generics.split_for_impl();
+
     let stored: Vec<&Field> = fields.iter().filter(|field| !field.skip).collect();
     let members: Vec<&Member> = stored.iter().map(|field| &field.member).collect();
     let names: Vec<&Ident> = stored.iter().map(|field| &field.name).collect();
@@ -328,6 +336,48 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             }
         }
     });
+    let projections: Vec<_> = stored
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let Field {
+                name,
+                ty,
+                vis,
+                limits,
+                ..
+            } = field;
+            let at = offset(&stored[..index], quote!(0), context);
+            quote! {
+                /// An exclusive field projection, retaining the enclosing buffer.
+                #vis fn #name(self) -> #krate::Edit<'__zeropod, #ty> {
+                    let bytes = self.0.as_bytes();
+                    // SAFETY: a validated struct's fields have these offsets and
+                    // bounds; replacing one preserves every enclosing encoding.
+                    let at = unsafe { #at };
+                    // SAFETY: the field at this offset has its declared bounds.
+                    unsafe { self.0.project::<#ty>(at, |with| with(#limits)) }
+                }
+            }
+        })
+        .collect();
+    let mutable_accessors = stored.iter().map(|field| {
+        let Field {
+            name: field_name,
+            ty,
+            vis,
+            ..
+        } = field;
+        let method = format_ident!("{}_mut", field_name);
+        quote! {
+            /// An exclusive field projection, retaining the enclosing buffer.
+            #vis fn #method(&mut self) -> #krate::Edit<'_, #ty> {
+                // SAFETY: this view owns the complete validated encoding.
+                let edit = unsafe { #krate::Edit::<#name #ty_generics>::new(&mut self.1) };
+                edit.fields().#field_name()
+            }
+        }
+    });
     let size_method = (!names.iter().any(|name| *name == "size")).then(|| {
         quote! {
             /// The bytes the encoding takes, without the room after it.
@@ -364,6 +414,21 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
         impl #impl_generics ::core::convert::AsRef<#krate::Bytes> for #view #ty_generics #where_clause {
             fn as_ref(&self) -> &#krate::Bytes {
                 &self.1
+            }
+        }
+
+        /// Mutable field projections retaining the complete enclosing encoding.
+        #vis struct #editor #editor_generics (#krate::Edit<'__zeropod, #name #ty_generics>) #editor_where;
+
+        impl #editor_impl #editor #editor_args #editor_where {
+            #(#projections)*
+        }
+
+        impl #impl_generics #krate::EditFields for #name #ty_generics #where_clause {
+            type Fields<'a> = #editor #editor_ref_args where Self: 'a;
+
+            fn fields<'a>(edit: #krate::Edit<'a, Self>) -> Self::Fields<'a> where Self: 'a {
+                #editor(edit)
             }
         }
 
@@ -470,9 +535,10 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
 
         impl #impl_generics #view #ty_generics #where_clause {
             #(#accessors)*
+            #(#mutable_accessors)*
             #size_method
 
-            /// The value, owned: to change a nested struct, change it and set it back.
+            /// The value, owned.
             #vis fn to_owned(&self) -> #name #ty_generics {
                 <#name #ty_generics as #zp>::own(self)
             }

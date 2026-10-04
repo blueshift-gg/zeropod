@@ -1,6 +1,6 @@
 //! Arrays: `[T; N]`, `N` items; and `ArrayString<N>` and `ArrayVec<T, N>`, a
-//! count then room for `N` bytes or items, full or not. All of fixed size,
-//! so a struct of them has every field at an offset known when compiling.
+//! count then room for `N` bytes or items, full or not. Only the latter two
+//! always have a fixed size; native arrays inherit their elements' sizes.
 
 use core::ops::Deref;
 
@@ -10,74 +10,188 @@ use crate::{
     scalar::item_size,
 };
 
-// SAFETY: `check` accepts `N` items `T` accepts; `read` views them in
-// place as `Stored`s, and `write` writes each.
-unsafe impl<T: Plain, const N: usize> ZeroPod for [T; N] {
+/// Exactly `N` consecutive encodings, borrowed without allocating. Fixed-size
+/// elements have constant-time indexing; variable-size elements are walked.
+/// Arrays of variable-size elements must follow fixed fields, as usual:
+///
+/// ```compile_fail
+/// #[derive(zeropod::ZeroPod)]
+/// struct Misordered {
+///     items: [Option<u32>; 2],
+///     fixed: u64,
+/// }
+/// ```
+#[repr(transparent)]
+pub struct Array<T, const N: usize> {
+    item: core::marker::PhantomData<fn() -> T>,
+    bytes: [u8],
+}
+
+impl<T: ZeroPod, const N: usize> Array<T, N> {
+    pub const fn len(&self) -> usize {
+        N
+    }
+    pub const fn is_empty(&self) -> bool {
+        N == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<T::Ref<'_>> {
+        if index >= N {
+            return None;
+        }
+        // SAFETY: this view holds N validated elements and index is in bounds.
+        unsafe {
+            Some(T::read(
+                &self.bytes[element_offset::<T>(&self.bytes, index)..],
+            ))
+        }
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = T::Ref<'_>> {
+        ArrayIter::<T> {
+            bytes: &self.bytes,
+            left: N,
+            item: core::marker::PhantomData,
+        }
+    }
+}
+
+struct ArrayIter<'a, T> {
+    bytes: &'a [u8],
+    left: usize,
+    item: core::marker::PhantomData<fn() -> T>,
+}
+
+impl<'a, T: ZeroPod + 'a> Iterator for ArrayIter<'a, T> {
+    type Item = T::Ref<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.left = self.left.checked_sub(1)?;
+        let bytes = self.bytes;
+        // SAFETY: bytes hold `left + 1` validated elements, even for empty
+        // encodings. Count elements rather than stopping when bytes run out.
+        unsafe {
+            self.bytes = &bytes[T::len(bytes)..];
+            Some(T::read(bytes))
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl<'a, T: ZeroPod + 'a> ExactSizeIterator for ArrayIter<'a, T> {}
+
+impl<T: Plain, const N: usize> Deref for Array<T, N> {
+    type Target = [T::Stored; N];
+
+    fn deref(&self) -> &Self::Target {
+        const { item_size::<T>() };
+        // SAFETY: N valid Stored values of alignment 1, including empty arrays.
+        unsafe { &*self.bytes.as_ptr().cast() }
+    }
+}
+
+/// The offset of an element (or the end), within a validated array.
+///
+/// # Safety
+/// `bytes` hold at least `index` valid encodings of T.
+pub(crate) unsafe fn element_offset<T: ZeroPod>(bytes: &[u8], index: usize) -> usize {
+    match T::SIZE {
+        Some(size) => index * size,
+        None => (0..index).fold(0, |at, _| {
+            // SAFETY: the preceding elements end where this one starts.
+            at + unsafe { T::len(&bytes[at..]) }
+        }),
+    }
+}
+
+// SAFETY: every method visits exactly N elements in order, without a count.
+// Only Plain's separate Deref casts encodings to their stored representation.
+unsafe impl<T: ZeroPod, const N: usize> ZeroPod for [T; N] {
     type Ref<'a>
-        = &'a [T::Stored; N]
+        = &'a Array<T, N>
     where
         Self: 'a;
     type In<'a>
-        = [T; N]
+        = &'a [T; N]
     where
         Self: 'a;
-    const SIZE: Option<usize> = Some(N * item_size::<T>());
-    const ANY_BYTES: bool = T::ANY_BYTES;
-    const NATIVE: bool = T::NATIVE;
+    const SIZE: Option<usize> = if N == 0 {
+        Some(0)
+    } else {
+        match T::SIZE {
+            Some(size) => Some(N * size),
+            None => None,
+        }
+    };
+    const ANY_BYTES: bool = N == 0 || T::ANY_BYTES;
+    const NATIVE: bool = N == 0 || T::NATIVE;
 
     #[inline]
-    fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
-        let size = item_size::<T>();
-        let items = bytes.get(..N * size).ok_or(Error::TooShort)?;
-        if !T::ANY_BYTES {
-            for item in items.chunks_exact(size.max(1)) {
-                T::check(item, &[])?;
+    fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
+        if let Some(size) = Self::SIZE {
+            if bytes.len() < size {
+                return Err(Error::TooShort);
+            }
+            if Self::ANY_BYTES {
+                return Ok(size);
             }
         }
-        Ok(N * size)
+        (0..N).try_fold(0, |at, _| Ok(at + T::check(&bytes[at..], limits)?))
     }
 
     #[inline]
-    unsafe fn len(_: &[u8]) -> usize {
-        N * item_size::<T>()
+    unsafe fn len(bytes: &[u8]) -> usize {
+        // SAFETY: the encoding contains N valid elements.
+        unsafe { element_offset::<T>(bytes, N) }
     }
 
     #[inline]
-    unsafe fn read(bytes: &[u8]) -> &[T::Stored; N] {
-        // SAFETY: the `N` items are there, each a valid `Stored` of
-        // alignment 1.
-        unsafe { &*bytes.as_ptr().cast() }
+    unsafe fn read(bytes: &[u8]) -> &Array<T, N> {
+        // SAFETY: Array is transparent over bytes holding N valid elements.
+        unsafe { &*(bytes as *const [u8] as *const Array<T, N>) }
+    }
+
+    fn encoded_len(values: &&[T; N], limits: &[usize]) -> Result<usize, Error> {
+        values.iter().try_fold(0usize, |at, value| {
+            at.checked_add(T::encoded_len(&value.input(), limits)?)
+                .ok_or(Error::TooLong)
+        })
     }
 
     #[inline]
-    fn encoded_len(values: &[T; N], _: &[usize]) -> Result<usize, Error> {
-        values
-            .iter()
-            .try_for_each(|value| T::encoded_len(&value.input(), &[]).map(drop))?;
-        Ok(N * item_size::<T>())
-    }
-
-    #[inline]
-    unsafe fn write(values: &[T; N], out: &mut [u8]) -> usize {
-        // SAFETY: `out` holds the `N` items.
+    unsafe fn write(values: &&[T; N], out: &mut [u8]) -> usize {
+        // SAFETY: out holds every preflighted element. NATIVE promises their
+        // memory bytes are their encoding; otherwise write each separately.
         unsafe {
+            if Self::NATIVE {
+                let len = size_of::<[T; N]>();
+                core::ptr::copy_nonoverlapping(values.as_ptr().cast::<u8>(), out.as_mut_ptr(), len);
+                return len;
+            }
             values.iter().fold(0, |at, value| {
                 at + T::write(&value.input(), out.get_unchecked_mut(at..))
             })
         }
     }
 
-    #[inline]
-    fn max_len(_: &[usize]) -> Option<usize> {
-        Some(N * item_size::<T>())
+    fn max_len(limits: &[usize]) -> Option<usize> {
+        if N == 0 {
+            Some(0)
+        } else {
+            N.checked_mul(T::max_len(limits)?)
+        }
     }
 
-    fn input(&self) -> [T; N] {
-        *self
+    fn input(&self) -> &[T; N] {
+        self
     }
 
-    fn own(items: &[T::Stored; N]) -> [T; N] {
-        items.map(|item| T::from_stored(&item))
+    fn own(items: &Array<T, N>) -> [T; N] {
+        let mut iter = items.iter();
+        core::array::from_fn(|_| T::own(iter.next().unwrap()))
     }
 }
 
