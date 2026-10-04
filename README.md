@@ -65,6 +65,12 @@ Reading in place gives each field's natural form: numbers by value; `&str`,
 `&[U64]` and other slices; `&Items<T>` to iterate strings, tuples or map
 entries; a view of a nested struct; an enum's `Ref`.
 
+`Box<T>` forwards `T`'s borrowed representation and size; it does not break
+recursion in a generated enum view. Recursive enums such as
+`enum List { Nil, Cons(u8, Box<List>) }` are currently unsupported: their
+borrowed form and size evaluation produce compile-time cycles. Recursive
+structs linked through `Option<Box<Node>>` can still encode and decode.
+
 `#[max_len(N)]` bounds a string or a vector; `#[max_len(10, 32)]` bounds a
 vector and the strings in it. It is checked when bytes are viewed and when a
 field is written, and gives a type's largest encoding (`ZeroPod::max_len`).

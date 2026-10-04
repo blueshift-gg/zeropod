@@ -360,6 +360,20 @@ impl<'a, T: ZeroPod + 'a> Iterator for Iter<'a, T> {
 
 impl<'a, T: ZeroPod + 'a> ExactSizeIterator for Iter<'a, T> {}
 
+/// A box forwards `T`'s borrowed form and size, without adding indirection
+/// to either. Recursive enums like this are therefore unsupported:
+///
+/// ```compile_fail
+/// #[derive(zeropod::ZeroPod)]
+/// enum List {
+///     Nil,
+///     Cons(u8, Box<List>),
+/// }
+/// ```
+///
+/// The generated `ListRef` would contain itself, and computing `SIZE` also
+/// cycles through `Box<List>`. Recursive structs linked through
+/// `Option<Box<Node>>` can still be encoded and decoded.
 // SAFETY: every method is `T`'s.
 unsafe impl<T: ZeroPod> ZeroPod for Box<T> {
     type Ref<'a>
@@ -451,7 +465,7 @@ macro_rules! collection {
             #[inline]
             fn encoded_len($entries: &&$ty, limits: &[usize]) -> Result<usize, Error> {
                 within::<u32>($entries.len(), limits)?;
-                let entry = |entry| <$entry>::encoded_len(&entry, &[]);
+                let entry = |entry| <$entry>::encoded_len(&entry, limits.get(1..).unwrap_or(&[]));
                 $entries.iter().map($pair).try_fold(4, |at, pair| Ok(at + entry(pair)?))
             }
 
