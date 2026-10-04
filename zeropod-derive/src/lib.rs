@@ -307,7 +307,10 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             limits,
             ..
         } = field;
-        let setter = format_ident!("set_{}", field_name.to_string().trim_start_matches('_'));
+        let setter = match &field.member {
+            Member::Named(ident) => format_ident!("set_{}", ident),
+            Member::Unnamed(index) => format_ident!("set_{}", index.index),
+        };
         let at = offset(&stored[..index], quote!(0), context);
         let doc_get = format!("`{field_name}`, read in place.");
         let doc_set =
@@ -322,6 +325,8 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             }
 
             #[doc = #doc_set]
+            // Preserve field underscores without warning on names like `set__x`.
+            #[allow(non_snake_case)]
             #vis fn #setter(
                 &mut self,
                 value: <#ty as #zp>::In<'_>,

@@ -50,3 +50,46 @@ fn derives_compile_beside_shadowing_names_through_a_reexport() {
     };
     assert_eq!(kind, "plain");
 }
+
+#[test]
+fn raw_and_underscore_field_setters_and_tuple_indices() {
+    use zeropod::{Layout, ZeroPod};
+    #[derive(ZeroPod)]
+    struct Names {
+        r#type: u8,
+        _x: u8,
+        x: u8,
+    }
+    #[derive(ZeroPod)]
+    struct Pair(u8, u8);
+    let mut bytes = [0; 3];
+    let view = Names::view_mut(&mut bytes).unwrap();
+    view.set_type(1).unwrap();
+    view.set__x(2).unwrap();
+    view.set_x(3).unwrap();
+    assert_eq!((view.r#type(), view._x(), view.x()), (1, 2, 3));
+    view.type_mut().set(4).unwrap();
+    let mut bytes = [0; 2];
+    let view = Pair::view_mut(&mut bytes).unwrap();
+    view.set_0(5).unwrap();
+    view.set_1(6).unwrap();
+    assert_eq!((view._0(), view._1()), (5, 6));
+}
+
+#[test]
+fn boxed_recursive_struct_round_trips() {
+    #[derive(Debug, PartialEq, zeropod::ZeroPod)]
+    struct Node {
+        value: u8,
+        next: Option<Box<Node>>,
+    }
+    let node = Node {
+        value: 1,
+        next: Some(Box::new(Node {
+            value: 2,
+            next: None,
+        })),
+    };
+    let bytes = zeropod::to_vec(&node).unwrap();
+    assert_eq!(zeropod::from_slice::<Node>(&bytes).unwrap(), node);
+}
