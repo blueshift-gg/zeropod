@@ -61,7 +61,7 @@
 //!
 //! A view is a [`Bytes`], whose bytes only this crate can change, and only
 //! to another valid encoding: once validated, a view stays valid. Even in the
-//! module that declares the type, safe code cannot write them:
+//! module that declares the type, the byte mutation method is private:
 //!
 //! ```compile_fail
 //! # use zeropod::{Layout, ZeroPod};
@@ -73,7 +73,7 @@
 //!
 //! let mut bytes = zeropod::to_vec(&Named { name: "ada".into() }).unwrap();
 //! let view = Named::view_mut(&mut bytes).unwrap();
-//! view.0.as_mut_slice()[4] = 0xff; // no such method: the bytes stay UTF-8
+//! unsafe { view.1.as_mut_slice()[4] = 0xff; } // private, even in an unsafe block
 //! ```
 #![no_std]
 

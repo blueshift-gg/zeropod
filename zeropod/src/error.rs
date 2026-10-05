@@ -15,6 +15,8 @@ pub enum Error {
     NoRoom,
     /// Bytes left over after the encoding, for `from_slice`.
     TrailingBytes,
+    /// A counted collection's element encoding has zero bytes.
+    ZeroSizedItem,
 }
 
 impl core::fmt::Display for Error {
@@ -27,6 +29,7 @@ impl core::fmt::Display for Error {
             Self::TooLong => "a string or vector past its maximum length",
             Self::NoRoom => "no room for a field to grow into",
             Self::TrailingBytes => "bytes left after the encoding",
+            Self::ZeroSizedItem => "a counted collection's element encoding has zero bytes",
         })
     }
 }
