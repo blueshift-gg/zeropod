@@ -98,7 +98,7 @@ pub mod wincode;
 #[doc(hidden)]
 pub mod __private;
 
-pub use array::{Array, ArrayString, ArrayVec};
+pub use array::{Array, ArrayString, ArrayVec, Iter};
 pub use bytes::Bytes;
 pub use count::Prefix;
 pub use edit::{Edit, EditFields};

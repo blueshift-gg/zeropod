@@ -50,11 +50,6 @@ pub const fn fixed_after_variable(sizes: &[Option<usize>], field: usize) -> bool
     false
 }
 
-/// The larger of two bounds, `None` if either is unbounded.
-pub fn max(a: Option<usize>, b: Option<usize>) -> Option<usize> {
-    Some(a?.max(b?))
-}
-
 /// The bytes from `at`, or none if `at` is past the end: the next check
 /// then fails as too short.
 #[inline(always)]

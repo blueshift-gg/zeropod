@@ -127,3 +127,55 @@ fn enum_field_bindings_do_not_shadow_generated_locals() {
         assert_eq!(zeropod::read::<Event>(&bytes).unwrap().to_owned(), value);
     }
 }
+
+#[test]
+fn getters_win_over_view_convenience_methods() {
+    use zeropod::{Edit, Layout, ZeroPod};
+    #[derive(Debug, PartialEq, ZeroPod)]
+    struct Names {
+        edit: u8,
+        to_owned: u8,
+        size: u8,
+    }
+    let value = Names {
+        edit: 1,
+        to_owned: 2,
+        size: 3,
+    };
+    let mut bytes = zeropod::to_vec(&value).unwrap();
+    let view = Names::view_mut(&mut bytes).unwrap();
+    assert_eq!((view.edit(), view.to_owned(), view.size()), (1, 2, 3));
+    assert_eq!(Names::size(view), 3);
+    assert_eq!(Names::own(view), value);
+    Edit::<Names>::view(&mut bytes)
+        .unwrap()
+        .fields()
+        .edit()
+        .set(4)
+        .unwrap();
+    assert_eq!(Names::view(&bytes).unwrap().edit(), 4);
+}
+
+#[test]
+fn self_bounds_refer_to_the_original_generic_struct() {
+    use zeropod::{Error, Layout, ZeroPod};
+    #[derive(Debug, PartialEq, ZeroPod)]
+    struct Named<const N: usize> {
+        #[max_len(Self::CAP)]
+        name: String,
+    }
+    impl<const N: usize> Named<N> {
+        const CAP: usize = N;
+    }
+    assert_eq!(Named::<3>::max_len(&[]), Some(7));
+    let mut bytes = [0; 16];
+    let view = Named::<3>::view_mut(&mut bytes).unwrap();
+    view.set_name("abc").unwrap();
+    assert_eq!(view.name(), "abc");
+    assert_eq!(view.set_name("long"), Err(Error::TooLong));
+    assert_eq!(view.edit().fields().name().set("long"), Err(Error::TooLong));
+    view.edit().fields().name().set("xy").unwrap();
+    assert_eq!(view.name(), "xy");
+    let invalid = borsh::to_vec("long").unwrap();
+    assert!(matches!(Named::<3>::view(&invalid), Err(Error::TooLong)));
+}

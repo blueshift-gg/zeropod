@@ -68,6 +68,8 @@ entries; a view of a nested struct; an enum's `Ref`.
 `#[max_len(N)]` bounds a string or a vector; `#[max_len(10, 32)]` bounds a
 vector and the strings in it. It is checked when bytes are viewed and when a
 field is written, and gives a type's largest encoding (`ZeroPod::max_len`).
+Newtypes inherit the containing field's bounds unless their inner field declares
+its own bounds. `Self` in a bound expression refers to the deriving type.
 Tuples forward bounds to every member, so `#[max_len(4, 2)]` on a map allows
 four entries and applies the inner bound of two to both keys and values.
 Counted collections reject element types whose encoding has zero bytes,
@@ -143,6 +145,10 @@ checks bounds and capacity before touching bytes, then moves all following
 elements and enclosing fields. Failed writes leave the entire buffer
 unchanged; a sequence of successful writes is not a transaction. No allocation
 or mutable access to raw bytes is needed.
+
+Fields named `edit`, `to_owned`, or `size` keep their getters; the matching
+view convenience method is omitted. Use `Edit::<T>::view(&mut bytes)`,
+`T::own(view)`, or `T::size(view)` instead.
 
 ## Safety
 

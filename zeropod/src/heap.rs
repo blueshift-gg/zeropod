@@ -19,7 +19,7 @@ use core::{
 use crate::{
     __private::{from, from_unchecked},
     Error, Plain, ZeroPod,
-    array::Iter,
+    array::{Iter, element_offset},
     count::{Prefix, most, within},
     scalar::item_size,
 };
@@ -300,7 +300,12 @@ impl<T: ZeroPod, P: Prefix> Items<T, P> {
     }
 
     pub fn get(&self, index: usize) -> Option<T::Ref<'_>> {
-        self.iter().nth(index)
+        if index >= self.len() {
+            return None;
+        }
+        let bytes = &self.bytes[P::WIDTH..];
+        // SAFETY: the count was validated and index is within its elements.
+        unsafe { Some(T::read(&bytes[element_offset::<T>(bytes, index)..])) }
     }
 
     pub fn iter(&self) -> Iter<'_, T> {
