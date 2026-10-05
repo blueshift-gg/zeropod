@@ -19,6 +19,7 @@ use core::{
 use crate::{
     __private::{from, from_unchecked},
     Error, Plain, ZeroPod,
+    array::Iter,
     count::{Prefix, most, within},
     scalar::item_size,
 };
@@ -343,34 +344,6 @@ impl<T: Plain, P: Prefix> Deref for Items<T, P> {
         unsafe { core::slice::from_raw_parts(self.bytes.as_ptr().add(P::WIDTH).cast(), self.len()) }
     }
 }
-
-/// The items of an [`Items`], in order.
-pub struct Iter<'a, T> {
-    item: PhantomData<fn() -> T>,
-    bytes: &'a [u8],
-    at: usize,
-    left: usize,
-}
-
-impl<'a, T: ZeroPod + 'a> Iterator for Iter<'a, T> {
-    type Item = T::Ref<'a>;
-
-    fn next(&mut self) -> Option<T::Ref<'a>> {
-        self.left = self.left.checked_sub(1)?;
-        // SAFETY: an item starts at `at`, as `left` counts.
-        unsafe {
-            let bytes = from_unchecked(self.bytes, self.at);
-            self.at += T::len(bytes);
-            Some(T::read(bytes))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.left, Some(self.left))
-    }
-}
-
-impl<'a, T: ZeroPod + 'a> ExactSizeIterator for Iter<'a, T> {}
 
 /// A box forwards `T`'s borrowed form and size, without adding indirection
 /// to either. Recursive enums like this are therefore unsupported:

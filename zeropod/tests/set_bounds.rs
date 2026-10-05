@@ -33,7 +33,9 @@ macro_rules! bounded_set {
             assert_eq!(
                 Tags::view_mut(&mut bytes)
                     .unwrap()
-                    .tags_mut()
+                    .edit()
+                    .fields()
+                    .tags()
                     .set(&bad.tags),
                 Err(Error::TooLong)
             );
@@ -98,7 +100,9 @@ macro_rules! bounded_map {
                 assert_eq!(
                     Names::view_mut(&mut bytes)
                         .unwrap()
-                        .names_mut()
+                        .edit()
+                        .fields()
+                        .names()
                         .set(&bad.names),
                     Err(Error::TooLong)
                 );

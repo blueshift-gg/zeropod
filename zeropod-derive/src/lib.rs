@@ -288,9 +288,6 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
     let mut editor_generics = generics.clone();
     editor_generics.params.insert(0, parse_quote!('__zeropod));
     let (editor_impl, editor_args, editor_where) = editor_generics.split_for_impl();
-    let mut editor_ref_generics = generics.clone();
-    editor_ref_generics.params.insert(0, parse_quote!('a));
-    let (_, editor_ref_args, _) = editor_ref_generics.split_for_impl();
 
     let stored: Vec<&Field> = fields.iter().filter(|field| !field.skip).collect();
     let members: Vec<&Member> = stored.iter().map(|field| &field.member).collect();
@@ -366,23 +363,6 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             }
         })
         .collect();
-    let mutable_accessors = stored.iter().map(|field| {
-        let Field {
-            name: field_name,
-            ty,
-            vis,
-            ..
-        } = field;
-        let method = format_ident!("{}_mut", field_name);
-        quote! {
-            /// An exclusive field projection, retaining the enclosing buffer.
-            #vis fn #method(&mut self) -> #krate::Edit<'_, #ty> {
-                // SAFETY: this view owns the complete validated encoding.
-                let edit = unsafe { #krate::Edit::<#name #ty_generics>::new(&mut self.1) };
-                edit.fields().#field_name()
-            }
-        }
-    });
     let size_method = (!names.iter().any(|name| *name == "size")).then(|| {
         quote! {
             /// The bytes the encoding takes, without the room after it.
@@ -430,7 +410,7 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
         }
 
         impl #impl_generics #krate::EditFields for #name #ty_generics #where_clause {
-            type Fields<'a> = #editor #editor_ref_args where Self: 'a;
+            type Fields<'__zeropod> = #editor #editor_args where Self: '__zeropod;
 
             fn fields<'a>(edit: #krate::Edit<'a, Self>) -> Self::Fields<'a> where Self: 'a {
                 #editor(edit)
@@ -540,7 +520,12 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
 
         impl #impl_generics #view #ty_generics #where_clause {
             #(#accessors)*
-            #(#mutable_accessors)*
+            /// An exclusive editor retaining the complete enclosing encoding.
+            #vis fn edit(&mut self) -> #krate::Edit<'_, #name #ty_generics> {
+                // SAFETY: this view owns the complete validated encoding.
+                unsafe { #krate::Edit::new(&mut self.1) }
+            }
+
             #size_method
 
             /// The value, owned.

@@ -84,7 +84,9 @@ fn requested_types_and_fixed_derived_mutation() {
     assert_eq!(view.assets().get(7).unwrap().limit(), 7);
     assert_eq!(view.assets().iter().map(|a| a.balance()).sum::<u64>(), 8);
     assert!(view.assets().get(8).is_none());
-    view.assets_mut()
+    view.edit()
+        .fields()
+        .assets()
         .get_mut(3)
         .unwrap()
         .fields()
@@ -141,7 +143,9 @@ fn nested_growth_and_shrink_preserve_every_later_element_and_field() {
     bytes.resize(Envelope::max_len(&[]).unwrap(), 0xa5);
     let view = Envelope::view_mut(&mut bytes).unwrap();
     // Growing a nested field moves its name, later elements, and the tail.
-    view.positions_mut()
+    view.edit()
+        .fields()
+        .positions()
         .get_mut(0)
         .unwrap()
         .get_mut(0)
@@ -152,7 +156,7 @@ fn nested_growth_and_shrink_preserve_every_later_element_and_field() {
         .unwrap();
     expected.positions[0][0].expiry = Some(123);
     assert_eq!(view.to_owned(), expected);
-    let mut positions = view.positions_mut();
+    let mut positions = view.edit().fields().positions();
     positions
         .reborrow()
         .get_mut(0)
@@ -197,7 +201,9 @@ fn all_failed_writes_preserve_the_entire_buffer() {
     assert_eq!(
         Envelope::view_mut(&mut bytes)
             .unwrap()
-            .positions_mut()
+            .edit()
+            .fields()
+            .positions()
             .get_mut(0)
             .unwrap()
             .get_mut(0)
@@ -213,7 +219,9 @@ fn all_failed_writes_preserve_the_entire_buffer() {
     assert_eq!(
         Envelope::view_mut(&mut bytes)
             .unwrap()
-            .positions_mut()
+            .edit()
+            .fields()
+            .positions()
             .get_mut(0)
             .unwrap()
             .get_mut(0)
@@ -237,7 +245,9 @@ fn all_failed_writes_preserve_the_entire_buffer() {
     assert!(
         Envelope::view_mut(&mut bytes)
             .unwrap()
-            .positions_mut()
+            .edit()
+            .fields()
+            .positions()
             .get_mut(2)
             .is_none()
     );
@@ -278,7 +288,9 @@ fn validates_each_element_and_propagates_array_bounds() {
     assert_eq!(
         Strings::view_mut(&mut bytes)
             .unwrap()
-            .values_mut()
+            .edit()
+            .fields()
+            .values()
             .get_mut(0)
             .unwrap()
             .get_mut(1)
@@ -368,7 +380,7 @@ proptest! {
         bytes.resize(bytes.len() + extra, 0xa5);
         let before = bytes.clone();
         let replacement = NamedPosition { protocol: 7, expiry, name };
-        let result = Envelope::view_mut(&mut bytes).unwrap().positions_mut()
+        let result = Envelope::view_mut(&mut bytes).unwrap().edit().fields().positions()
             .get_mut(index / 2).unwrap().get_mut(index % 2).unwrap().set(&replacement);
         let within_bounds = replacement.name.len() <= 8;
         expected.positions[index / 2][index % 2] = replacement;
@@ -399,12 +411,20 @@ fn field_bound_expressions_need_not_be_promoted_to_static() {
     }
     let mut bytes = [0; 16];
     let view = Bounded::view_mut(&mut bytes).unwrap();
-    view.values_mut().get_mut(1).unwrap().set("abc").unwrap();
+    view.edit()
+        .fields()
+        .values()
+        .get_mut(1)
+        .unwrap()
+        .set("abc")
+        .unwrap();
     let before = bytes;
     assert_eq!(
         Bounded::view_mut(&mut bytes)
             .unwrap()
-            .values_mut()
+            .edit()
+            .fields()
+            .values()
             .get_mut(1)
             .unwrap()
             .set("long"),

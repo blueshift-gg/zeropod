@@ -5,6 +5,7 @@
 use core::ops::Deref;
 
 use crate::{
+    __private::from_unchecked,
     Error, Plain, ZeroPod,
     count::{Prefix, within},
     scalar::item_size,
@@ -47,8 +48,9 @@ impl<T: ZeroPod, const N: usize> Array<T, N> {
         }
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = T::Ref<'_>> {
-        ArrayIter::<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            at: 0,
             bytes: &self.bytes,
             left: N,
             item: core::marker::PhantomData,
@@ -56,22 +58,23 @@ impl<T: ZeroPod, const N: usize> Array<T, N> {
     }
 }
 
-struct ArrayIter<'a, T> {
-    bytes: &'a [u8],
-    left: usize,
-    item: core::marker::PhantomData<fn() -> T>,
+/// Validated array or counted-collection elements, in order.
+pub struct Iter<'a, T> {
+    pub(crate) item: core::marker::PhantomData<fn() -> T>,
+    pub(crate) bytes: &'a [u8],
+    pub(crate) at: usize,
+    pub(crate) left: usize,
 }
 
-impl<'a, T: ZeroPod + 'a> Iterator for ArrayIter<'a, T> {
+impl<'a, T: ZeroPod + 'a> Iterator for Iter<'a, T> {
     type Item = T::Ref<'a>;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<T::Ref<'a>> {
         self.left = self.left.checked_sub(1)?;
-        let bytes = self.bytes;
-        // SAFETY: bytes hold `left + 1` validated elements, even for empty
-        // encodings. Count elements rather than stopping when bytes run out.
+        // SAFETY: an item starts at `at`, as `left` counts.
         unsafe {
-            self.bytes = &bytes[T::len(bytes)..];
+            let bytes = from_unchecked(self.bytes, self.at);
+            self.at += T::len(bytes);
             Some(T::read(bytes))
         }
     }
@@ -81,7 +84,7 @@ impl<'a, T: ZeroPod + 'a> Iterator for ArrayIter<'a, T> {
     }
 }
 
-impl<'a, T: ZeroPod + 'a> ExactSizeIterator for ArrayIter<'a, T> {}
+impl<'a, T: ZeroPod + 'a> ExactSizeIterator for Iter<'a, T> {}
 
 impl<T: Plain, const N: usize> Deref for Array<T, N> {
     type Target = [T::Stored; N];
