@@ -621,19 +621,25 @@ fn enumeration(
         })
         .collect::<Result<_>>()?;
 
-    // Binds a variant's fields by name, of `ty`: the enum or its reference.
+    // Keep user field names out of local bindings: they may be `len`, `out`,
+    // `bytes`, or any other name used by the generated implementation.
+    let binding = |index: usize| {
+        format_ident!(
+            "__zeropod_field_{index}",
+            span = proc_macro2::Span::mixed_site()
+        )
+    };
+    // Binds a variant's fields, of `ty`: the enum or its reference.
     let pattern = |ty: &Ident, variant: &Variant| {
         let Variant {
             ident,
             shape,
             fields,
         } = variant;
-        let bound = fields.iter().map(|field| match &field.member {
-            Member::Named(name) => quote!(#name),
-            Member::Unnamed(index) => {
-                let name = &field.name;
-                quote!(#index: #name)
-            }
+        let bound = fields.iter().enumerate().map(|(index, field)| {
+            let member = &field.member;
+            let local = binding(index);
+            quote!(#member: #local)
         });
         match shape {
             Fields::Unit => quote!(#ty::#ident),
@@ -703,9 +709,10 @@ fn enumeration(
     let reads = variants.iter().zip(&tags).map(|(variant, tag)| {
         let fields: Vec<&Field> = variant.fields.iter().collect();
         let bound = fields.iter().enumerate().map(|(index, field)| {
-            let (field_name, ty) = (&field.name, &field.ty);
+            let local = binding(index);
+            let ty = &field.ty;
             let at = offset(&fields[..index], quote!(1), context);
-            quote!(let #field_name = <#ty as #zp>::read(#private::from_unchecked(bytes, #at));)
+            quote!(let #local = <#ty as #zp>::read(#private::from_unchecked(bytes, #at));)
         });
         let value = pattern(&reference, variant);
         quote!(#tag => { #(#bound)* #value })
@@ -714,7 +721,7 @@ fn enumeration(
     let encoded_lens = variants.iter().map(|variant| {
         let tys = variant.fields.iter().map(|field| &field.ty);
         let limits = variant.fields.iter().map(|field| &field.limits);
-        let names = variant.fields.iter().map(|field| &field.name);
+        let names = (0..variant.fields.len()).map(&binding);
         let value = pattern(name, variant);
         quote! {
             #value => {
@@ -727,7 +734,7 @@ fn enumeration(
 
     let writes = variants.iter().zip(&tags).map(|(variant, tag)| {
         let tys = variant.fields.iter().map(|field| &field.ty);
-        let names = variant.fields.iter().map(|field| &field.name);
+        let names = (0..variant.fields.len()).map(&binding);
         let value = pattern(name, variant);
         quote! {
             #value => {
@@ -754,9 +761,10 @@ fn enumeration(
 
     let owns = variants.iter().map(|variant| {
         let from = pattern(&reference, variant);
-        let owned = variant.fields.iter().map(|field| {
-            let (member, name, ty) = (&field.member, &field.name, &field.ty);
-            quote!(#member: <#ty as #zp>::own(#name))
+        let owned = variant.fields.iter().enumerate().map(|(index, field)| {
+            let (member, ty) = (&field.member, &field.ty);
+            let local = binding(index);
+            quote!(#member: <#ty as #zp>::own(#local))
         });
         let ident = variant.ident;
         let to = match variant.shape {

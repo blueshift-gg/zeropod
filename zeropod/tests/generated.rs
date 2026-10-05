@@ -93,3 +93,37 @@ fn boxed_recursive_struct_round_trips() {
     let bytes = zeropod::to_vec(&node).unwrap();
     assert_eq!(zeropod::from_slice::<Node>(&bytes).unwrap(), node);
 }
+
+#[test]
+fn enum_field_bindings_do_not_shadow_generated_locals() {
+    #[derive(Debug, PartialEq, zeropod::ZeroPod, borsh::BorshSerialize)]
+    enum Event {
+        Transfer {
+            len: u32,
+            at: u16,
+            out: u8,
+            bytes: String,
+            value: Option<u32>,
+            __zeropod_field_0: u8,
+        },
+        Tuple(u8, String),
+        Unit,
+    }
+    for value in [
+        Event::Transfer {
+            len: 17,
+            at: 4,
+            out: 2,
+            bytes: "payload".into(),
+            value: Some(9),
+            __zeropod_field_0: 7,
+        },
+        Event::Tuple(3, "tuple".into()),
+        Event::Unit,
+    ] {
+        let bytes = zeropod::to_vec(&value).unwrap();
+        assert_eq!(bytes, borsh::to_vec(&value).unwrap());
+        assert_eq!(zeropod::from_slice::<Event>(&bytes).unwrap(), value);
+        assert_eq!(zeropod::read::<Event>(&bytes).unwrap().to_owned(), value);
+    }
+}

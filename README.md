@@ -74,6 +74,11 @@ structs linked through `Option<Box<Node>>` can still encode and decode.
 `#[max_len(N)]` bounds a string or a vector; `#[max_len(10, 32)]` bounds a
 vector and the strings in it. It is checked when bytes are viewed and when a
 field is written, and gives a type's largest encoding (`ZeroPod::max_len`).
+Tuples forward bounds to every member, so `#[max_len(4, 2)]` on a map allows
+four entries and applies the inner bound of two to both keys and values.
+Counted collections reject element types whose encoding has zero bytes,
+including when the collection is empty. Fixed-length arrays still support
+zero-byte elements.
 
 Fields of fixed size come first, and fields whose size varies come last, so
 every fixed field is at an offset known when compiling. `ArrayString` and

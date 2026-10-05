@@ -2,6 +2,8 @@
 //! little-endian `u32` count, then the bytes, items or entries, which a map
 //! writes sorted by key as Borsh does. `SmallStr` and `SmallVec`: the same
 //! after a `u8` or `u16` count. `Box<T>`: its `T`.
+//! Counted collections reject zero-byte element encodings, even when empty,
+//! so a count alone cannot cause unbounded decoding work or allocation.
 
 use alloc::{
     boxed::Box,
@@ -154,6 +156,14 @@ string! {
     [P: Prefix] SmallStr<P>, P;
 }
 
+fn check_item_size<T: ZeroPod>() -> Result<(), Error> {
+    if T::SIZE == Some(0) {
+        Err(Error::ZeroSizedItem)
+    } else {
+        Ok(())
+    }
+}
+
 /// Vectors: a `$count`, then that many items.
 macro_rules! vector {
     ($([$($bounds:tt)*] $ty:ty, $count:ty);* $(;)?) => {$(
@@ -171,6 +181,7 @@ macro_rules! vector {
 
             #[inline]
             fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
+                check_item_size::<T>()?;
                 let len = <$count>::count(bytes)?;
                 within::<$count>(len, limits)?;
                 match T::SIZE {
@@ -213,6 +224,7 @@ macro_rules! vector {
 
             #[inline]
             fn encoded_len(values: &&[T], limits: &[usize]) -> Result<usize, Error> {
+                check_item_size::<T>()?;
                 within::<$count>(values.len(), limits)?;
                 if let Some(size) = T::SIZE {
                     return Ok(<$count>::WIDTH + values.len() * size);
@@ -464,6 +476,7 @@ macro_rules! collection {
 
             #[inline]
             fn encoded_len($entries: &&$ty, limits: &[usize]) -> Result<usize, Error> {
+                check_item_size::<$entry>()?;
                 within::<u32>($entries.len(), limits)?;
                 let entry = |entry| <$entry>::encoded_len(&entry, limits.get(1..).unwrap_or(&[]));
                 $entries.iter().map($pair).try_fold(4, |at, pair| Ok(at + entry(pair)?))
