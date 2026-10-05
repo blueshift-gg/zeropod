@@ -68,7 +68,7 @@ fn raw_and_underscore_field_setters_and_tuple_indices() {
     view.set__x(2).unwrap();
     view.set_x(3).unwrap();
     assert_eq!((view.r#type(), view._x(), view.x()), (1, 2, 3));
-    view.type_mut().set(4).unwrap();
+    view.edit().fields().r#type().set(4).unwrap();
     let mut bytes = [0; 2];
     let view = Pair::view_mut(&mut bytes).unwrap();
     view.set_0(5).unwrap();

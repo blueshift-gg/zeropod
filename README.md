@@ -65,12 +65,6 @@ Reading in place gives each field's natural form: numbers by value; `&str`,
 `&[U64]` and other slices; `&Items<T>` to iterate strings, tuples or map
 entries; a view of a nested struct; an enum's `Ref`.
 
-`Box<T>` forwards `T`'s borrowed representation and size; it does not break
-recursion in a generated enum view. Recursive enums such as
-`enum List { Nil, Cons(u8, Box<List>) }` are currently unsupported: their
-borrowed form and size evaluation produce compile-time cycles. Recursive
-structs linked through `Option<Box<Node>>` can still encode and decode.
-
 `#[max_len(N)]` bounds a string or a vector; `#[max_len(10, 32)]` bounds a
 vector and the strings in it. It is checked when bytes are viewed and when a
 field is written, and gives a type's largest encoding (`ZeroPod::max_len`).
@@ -123,7 +117,7 @@ let mut bytes = wincode::config::serialize(&vault, zeropod::wincode::CONFIG)?;
 bytes.resize(Vault::max_len(&[]).unwrap(), 0);
 let view = Vault::view_mut(&mut bytes)?;
 assert_eq!(view.assets().get(0).unwrap().limit(), 100);
-view.positions_mut().get_mut(0).unwrap()
+view.edit().fields().positions().get_mut(0).unwrap()
     .fields().max_staleness_seconds().set(Some(30))?;
 let used = view.size();
 let decoded: Vault = wincode::config::deserialize_exact(
@@ -140,7 +134,7 @@ elements is constant time; variable-size indexing walks preceding elements.
 `#[max_len]` on an array passes its bounds to each element without consuming
 a bound for the array itself.
 
-`field_mut()` returns an exclusive `Edit<T>` cursor. Use `get_mut(index)` to
+`view.edit()` returns an exclusive `Edit<T>` cursor. Use `get_mut(index)` to
 select an array element, `fields()` to select a derived struct's named field,
 and `set(value)` to replace it. These projections consume the cursor;
 `reborrow()` allows repeated edits through a retained cursor. `Edit::<T>::view`
@@ -149,15 +143,6 @@ checks bounds and capacity before touching bytes, then moves all following
 elements and enclosing fields. Failed writes leave the entire buffer
 unchanged; a sequence of successful writes is not a transaction. No allocation
 or mutable access to raw bytes is needed.
-
-Compared with the initial 0.4 API, array setters now take `&[T; N]` (for
-example, `view.set_assets(&assets)`), allowing non-`Copy` elements. Array
-reads now return `&Array<T, N>` instead of `&[T::Stored; N]`. For `T: Plain`,
-`Deref<Target = [T::Stored; N]>` preserves indexing and stored-array coercions;
-`get` and `iter` now return `T::Ref` (for example, `u64` instead of `U64`).
-Use `&**array_view` when an explicit stored array is needed. Primitive
-validation and native-copy write fast paths remain. Derived structs are
-never made `Plain`: their native layout may be padded, aligned, or variable.
 
 ## Safety
 

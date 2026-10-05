@@ -26,7 +26,9 @@ fn arrays_and_nested_edits_without_alloc() {
     let len = zeropod::write(&args, &mut bytes).unwrap();
     assert_eq!(len, 13);
     let view = Args::<Position, 2>::view_mut(&mut bytes).unwrap();
-    view.positions_mut()
+    view.edit()
+        .fields()
+        .positions()
         .get_mut(0)
         .unwrap()
         .fields()
@@ -41,7 +43,9 @@ fn arrays_and_nested_edits_without_alloc() {
     let before = bytes;
     let view = Args::<Position, 2>::view_mut(&mut bytes[..17]).unwrap();
     assert_eq!(
-        view.positions_mut()
+        view.edit()
+            .fields()
+            .positions()
             .get_mut(1)
             .unwrap()
             .fields()
@@ -62,7 +66,13 @@ struct Bounded<const N: usize> {
 fn const_generic_field_bounds_and_empty_stored_arrays() {
     let mut bytes = [0; 16];
     let view = Bounded::<4>::view_mut(&mut bytes).unwrap();
-    view.values_mut().get_mut(0).unwrap().set("four").unwrap();
+    view.edit()
+        .fields()
+        .values()
+        .get_mut(0)
+        .unwrap()
+        .set("four")
+        .unwrap();
     assert_eq!(view.values().get(0), Some("four"));
     let empty = zeropod::read::<[u8; 0]>(&[]).unwrap();
     let stored: &[u8; 0] = empty;
