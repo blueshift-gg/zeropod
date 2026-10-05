@@ -1,172 +1,112 @@
 # zeropod
 
-Zero-copy, alignment-1 pod types for Solana programs.
+Borsh's encoding, read and written in place.
 
-zeropod lets you read and write on-chain data through direct pointer casts — no serialization, no copies, no alignment traps. Every type is `#[repr(C)]` with alignment 1, so it maps directly onto Solana account bytes.
-
-## Install
-
-```toml
-[dependencies]
-zeropod = "0.3"
-```
-
-## Pod Types
-
-All pod types are `Copy`, alignment 1, and safe to cast from arbitrary byte slices after validation.
-
-| Type | Size | Description |
-|------|------|-------------|
-| `PodU16` .. `PodU128` | 2–16 | Unsigned integers, little-endian `[u8; N]` |
-| `PodI16` .. `PodI128` | 2–16 | Signed integers, little-endian `[u8; N]` |
-| `PodBool` | 1 | Boolean (byte must be 0 or 1) |
-| `PodOption<T>` | 1 + size_of(T) | Optional value (tag byte + `MaybeUninit<T>`) |
-| `PodString<N, PFX>` | PFX + N | UTF-8 string, length-prefixed, max N bytes |
-| `PodVec<T, N, PFX>` | PFX + N * size_of(T) | Typed vector, length-prefixed, max N elements |
-
-Convenience aliases: `zeropod::String<N>` = `PodString<N, 1>`, `zeropod::Vec<T, N>` = `PodVec<T, N, 2>`.
-
-## Derive Macro
-
-`#[derive(ZeroPod)]` generates a zero-copy companion type with validation and pointer-cast access.
-
-### Fixed layout
-
-Every field is a known size. The companion type is a direct `#[repr(C)]` mirror.
+Derive `ZeroPod` where you derive `BorshSerialize` and `BorshDeserialize`.
+The bytes are the same, so anything that reads Borsh reads yours. On top of
+that, zeropod reads and writes fields where they lie in the bytes, without
+copying them into a struct first.
 
 ```rust
-use zeropod::ZeroPod;
+use zeropod::{Layout, ZeroPod};
 
 #[derive(ZeroPod)]
-struct TokenAccount {
-    pub mint: [u8; 32],
+pub struct Profile {
     pub owner: [u8; 32],
-    pub amount: u64,
-    pub is_frozen: bool,
-}
-
-// Read from raw account bytes — validates, then pointer-casts (zero copy):
-let zc = TokenAccount::from_bytes(&account_data)?;
-let amount: u64 = zc.amount.get();
-```
-
-### Compact layout
-
-For structs with variable-length fields. The on-chain format is `[fixed header + length prefixes][tail data]`. Fixed fields and length prefixes live in the header; dynamic data (strings, vecs) is packed contiguously after it.
-
-```rust
-use zeropod::ZeroPod;
-
-#[derive(ZeroPod)]
-#[zeropod(compact)]
-struct Profile {
-    pub authority: [u8; 32],
     pub score: u64,
-    pub name: zeropod::String<32>,
-    pub tags: zeropod::Vec<u8, 16>,
+    #[max_len(32)]
+    pub name: String,
+    #[max_len(10)]
+    pub tags: Vec<u64>,
+    pub role: Role,
 }
 
-// Read via zero-copy Ref:
-let r = ProfileRef::new(&data)?;
-let name: &str = r.name();
-let tags: &[u8] = r.tags();
-
-// Mutate via Mut + commit:
-let mut m = ProfileMut::new(&mut data)?;
-m.set_name("alice")?;
-m.commit()?;
-```
-
-### Enums
-
-Unit enums with `#[repr(u8)]` get a zero-copy companion that validates the discriminant.
-
-```rust
 #[derive(ZeroPod)]
-#[repr(u8)]
-enum Status {
-    Inactive = 0,
-    Active = 1,
-    Frozen = 2,
+pub enum Role {
+    Admin,
+    Member { since: i64 },
 }
+
+// As Borsh does: owned values in and out.
+let bytes = zeropod::to_vec(&profile)?;
+let profile: Profile = zeropod::from_slice(&bytes)?;
+
+// In place: validated once, then every read is free.
+let view = Profile::view(&bytes)?;
+view.score();          // u64
+view.name();           // &str
+view.tags();           // &[U64]
+view.role();           // RoleRef::Member { since }
+
+// Written in place: later fields move within the room after the encoding.
+let view = Profile::view_mut(&mut room)?;
+view.set_name("ada")?;
+let used = view.size();
 ```
 
-## Arithmetic
+## Types
 
-Numeric pods use wrapping semantics in release builds and panic on overflow in debug builds — matching native integer behavior.
+| Field | Stored as |
+|---|---|
+| `u8`…`u128`, `i8`…`i128` | little-endian |
+| `bool` | one byte, 0 or 1 |
+| `()`, `PhantomData<T>` | nothing |
+| `[T; N]` of fixed-size items, `Address` (feature `solana-address`) | the items in place |
+| `String`, `Vec<T>` | a `u32` count, then the bytes or items |
+| `BTreeMap`, `BTreeSet`, `HashMap`, `HashSet` (feature `std`) | a count, then the entries in key order |
+| `Option<T>`, `Result<T, E>` | a tag, then the value |
+| `Box<T>`, tuples | their contents |
+| a derived struct, generic or not | its fields in order; one unnamed field is stored as that field |
+| a derived enum | a one-byte tag (the variant's index, or its written discriminant), then that variant's fields |
+| `ArrayString<N>`, `ArrayVec<T, N>` | a `u32` count, then room for `N`: always the same size |
+| `SmallStr<u8>`, `SmallStr<u16>`, `SmallVec<T, u8>`, `SmallVec<T, u16>` | a `u8` or `u16` count, then the bytes or items |
 
-```rust
-use zeropod::pod::PodU64;
+Reading in place gives each field's natural form: numbers by value; `&str`,
+`&[U64]` and other slices; `&Items<T>` to iterate strings, tuples or map
+entries; a view of a nested struct; an enum's `Ref`.
 
-let a = PodU64::from(100u64);
-let b = PodU64::from(42u64);
-assert_eq!((a + b).get(), 142);
-assert_eq!((a - b).get(), 58);
+`#[max_len(N)]` bounds a string or a vector; `#[max_len(10, 32)]` bounds a
+vector and the strings in it. It is checked when bytes are viewed and when a
+field is written, and gives a type's largest encoding (`ZeroPod::max_len`).
 
-// For security-sensitive code, use checked arithmetic:
-assert_eq!(a.checked_sub(b), Some(PodU64::from(58)));
-assert_eq!(b.checked_sub(a), None); // would underflow
-```
+Fields of fixed size come first, and fields whose size varies come last, so
+every fixed field is at an offset known when compiling. `ArrayString` and
+`ArrayVec` trade Borsh compatibility for a fixed size: a struct of fixed
+fields only has one size, and writing it never moves anything.
+`SmallStr` and `SmallVec` trade it for a shorter count: a `String` or a `Vec`
+of at most 255 or 65,535 bytes or items, made with `.into()` and used as
+the type it wraps.
 
-## Validation
+## Safety
 
-Every pod type implements `ZcValidate` — called automatically by `from_bytes()`. Validation rejects:
+A view is a `Bytes`, whose bytes only zeropod can change, and only to
+another valid encoding: once validated, a view stays valid, whatever the
+code around it does. The `unsafe` lives in one implementation per wire type
+and in the function that moves fields; the derive only calls them.
 
-- `PodBool` with byte > 1
-- `PodOption` with tag other than 0 or 1, or invalid inner value
-- `PodString` with length > N or invalid UTF-8
-- `PodVec` with length > N or invalid elements
-- Enum discriminants outside the declared variants
+Checked in CI: a property test against the `borsh` crate for every kind of
+field, both ways; property tests of writes and of corrupted bytes; Miri,
+under stacked and tree borrows; and a Kani proof of the field move.
 
-```rust
-// Malicious account data with bool byte = 5:
-let mut buf = [0u8; 33];
-buf[8] = 5; // invalid bool
-assert!(TokenAccount::from_bytes(&buf).is_err());
-```
+## Your own types
 
-## Traits
+Derive `ZeroPod`; `#[borsh(skip)]` and `#[borsh(use_discriminant = ..)]`
+mean what they mean to Borsh, so a Borsh type derives unchanged. A newtype,
+`struct Lamports(u64)`, is stored as its field. Anything else implements the
+`unsafe trait ZeroPod` by hand, under the contract its documentation spells
+out.
 
-| Trait | Purpose |
-|-------|---------|
-| `ZeroPodSchema` | Declares fixed vs compact layout |
-| `ZeroPodFixed` | Zero-copy access for fixed-size types |
-| `ZeroPodCompact` | Zero-copy access for variable-length types |
-| `ZcValidate` | Validates byte representations |
-| `ZcElem` | Marker: alignment 1, valid for packed access (unsafe) |
-| `ZcField` | Maps native Rust types to their pod companions |
+## Features
 
-## Feature Flags
+- `alloc` (default): `String`, `Vec`, `Box`, B-tree maps and sets, `to_vec`.
+- `std`: hash maps and sets.
+- `solana-address`: `Address` fields.
+- `solana-program-error`: `?` from `zeropod::Error` into `ProgramError`.
+- `wincode`: for a type shared with code that speaks wincode. Derive
+  `SchemaWrite` and `SchemaRead` beside `ZeroPod`, and under
+  `zeropod::wincode::CONFIG` wincode writes and reads zeropod's bytes,
+  zeropod's own types included. `Result` and hash maps differ: wincode swaps
+  the first's tags and does not sort the second.
 
-| Flag | What it enables |
-|------|----------------|
-| `solana-address` | `ZcElem` + `ZcField` for `solana_address::Address` |
-| `solana-program-error` | `From<ZeroPodError> for ProgramError` |
-| `wincode` | `SchemaWrite` / `SchemaRead` for all pod types |
-
-## Miri
-
-```sh
-rustup toolchain install nightly-2026-03-27 --component miri,rust-src
-cargo +stable install cargo-nextest --version 0.9.144 --locked
-bash scripts/miri.sh
-```
-
-CI runs the tests with strict provenance under Stacked Borrows and Tree Borrows.
-Set `MIRIFLAGS` to select another configuration; results go to `target/miri-results`.
-
-## Formal Verification
-
-zeropod includes [Kani](https://model-checking.github.io/kani/) model-checking proofs covering:
-
-- Roundtrip correctness for all pod types (encode -> decode preserves value)
-- Length prefix encode/decode consistency across all prefix widths
-- Bounds clamping (corrupted length prefixes cannot cause out-of-bounds access)
-- Arithmetic operator consistency with native integers
-- UTF-8 preservation in `PodString`
-- `PodOption` tag semantics (invalid tags treated as None)
-- Checked arithmetic matches `std` semantics
-
-## License
-
-Apache-2.0
+`#[zeropod(crate = path)]` points the derive at a crate that re-exports
+zeropod, for frameworks built on it.
