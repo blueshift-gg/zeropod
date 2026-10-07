@@ -7,7 +7,7 @@ use common::{Profile, profile};
 use proptest::prelude::*;
 use wincode::{
     SchemaRead, SchemaWrite,
-    config::{deserialize_exact, deserialize_from, serialize},
+    config::{deserialize, deserialize_exact, deserialize_from, serialize},
     io::std_read::ReadAdapter,
 };
 use zeropod::{ArrayString, ArrayVec, SmallStr, SmallVec, ZeroPod, wincode::CONFIG};
@@ -84,4 +84,41 @@ fn what_zeropod_rejects_wincode_rejects() {
     // `name` not UTF-8.
     assert!(read(&with(12 + 16 + 6 + 1, 0xff)).is_err());
     assert!(read(&bytes[..bytes.len() - 1]).is_err());
+}
+
+/// Fields of alignment 1 only: wincode borrows it in place, as zeropod views it.
+#[derive(ZeroPod, SchemaRead, SchemaWrite)]
+#[repr(C)]
+#[wincode(assert_zero_copy(zeropod::wincode::Config))]
+struct Header {
+    owner: [u8; 32],
+    bump: u8,
+    score: zeropod::U64,
+}
+
+#[test]
+fn an_unaligned_struct_is_zero_copy_for_both() {
+    use wincode::config::ZeroCopy;
+    use zeropod::Layout;
+
+    let value = Header {
+        owner: [3; 32],
+        bump: 9,
+        score: 0x0102_0304_0506_0708.into(),
+    };
+    let bytes = zeropod::to_vec(&value).unwrap();
+    assert_eq!(serialize(&value, CONFIG).unwrap(), bytes);
+
+    // At an odd address: alignment 1 borrows anywhere.
+    let mut odd = vec![0];
+    odd.extend_from_slice(&bytes);
+    let header = Header::from_bytes(&odd[1..], CONFIG).unwrap();
+    let view = Header::view(&odd[1..]).unwrap();
+    assert_eq!(
+        (header.bump, header.score.get()),
+        (view.bump(), view.score())
+    );
+    assert_eq!(view.score(), 0x0102_0304_0506_0708);
+    let score: &zeropod::U64 = deserialize(&odd[1 + 33..], CONFIG).unwrap();
+    assert_eq!(*score, 0x0102_0304_0506_0708);
 }

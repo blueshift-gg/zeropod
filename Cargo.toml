@@ -11,6 +11,10 @@ repository = "https://github.com/blueshift-gg/zeropod"
 [workspace.dependencies]
 zeropod-derive = { version = "=0.4.0", path = "zeropod-derive" }
 
+# Blocked on anza-xyz/wincode#479: its `zerocopy` feature, until released.
+[patch.crates-io]
+wincode = { git = "https://github.com/Aursen/wincode", rev = "8d45540b946ce9418c6be0c2a7cef979e61cc75e" }
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

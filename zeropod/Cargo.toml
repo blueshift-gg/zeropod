@@ -15,7 +15,7 @@ std = ["alloc"]
 solana-address = ["dep:solana-address"]
 # `SchemaWrite` and `SchemaRead` for zeropod's own types, and the
 # configuration in which wincode writes zeropod's bytes.
-wincode = ["dep:wincode", "alloc"]
+wincode = ["dep:wincode", "wincode/zerocopy", "alloc"]
 # `From<Error> for ProgramError`, which only this crate can write.
 solana-program-error = ["dep:solana-program-error"]
 
@@ -29,7 +29,7 @@ wincode = { version = "0.6", optional = true, default-features = false, features
 [dev-dependencies]
 borsh = { version = "1", features = ["derive"] }
 proptest = "1"
-wincode = { version = "0.6", features = ["derive"] }
+wincode = { version = "0.6", features = ["derive", "zerocopy"] }
 solana-address = { version = ">= 2.2, < 3", default-features = false, features = ["copy"] }
 
 [lints]
