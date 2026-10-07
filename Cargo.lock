@@ -1038,22 +1038,21 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "wincode"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfc6339f1ba427bf7ad7c42403b28e524832ba2ddb5eef1bb2cc3b85db6b7b75"
+version = "0.6.2"
+source = "git+https://github.com/Aursen/wincode?rev=8d45540b946ce9418c6be0c2a7cef979e61cc75e#8d45540b946ce9418c6be0c2a7cef979e61cc75e"
 dependencies = [
  "pastey",
  "proc-macro2",
  "quote",
  "thiserror",
  "wincode-derive",
+ "zerocopy",
 ]
 
 [[package]]
 name = "wincode-derive"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11d582d9fc9d813264407a9e16bfa16846ccf15ef032f9bbcd700741bdc00255"
+source = "git+https://github.com/Aursen/wincode?rev=8d45540b946ce9418c6be0c2a7cef979e61cc75e#8d45540b946ce9418c6be0c2a7cef979e61cc75e"
 dependencies = [
  "darling",
  "proc-macro2",

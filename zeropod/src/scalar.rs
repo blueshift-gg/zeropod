@@ -120,6 +120,84 @@ number!(
     i128 => crate::I128;
 );
 
+/// The little-endian integers, as fields: each is encoded as its number and
+/// is those bytes in memory, of alignment 1, so a `#[repr(C)]` struct of
+/// them and of bytes has no padding, and wincode can borrow it in place.
+macro_rules! stored {
+    ($($stored:ty => $ty:ty);* $(;)?) => {$(
+        // SAFETY: the number's encoding, which is what the stored form holds.
+        unsafe impl ZeroPod for $stored {
+            type Ref<'a> = $ty;
+            type In<'a> = $ty;
+            const SIZE: Option<usize> = <$ty as ZeroPod>::SIZE;
+            const ANY_BYTES: bool = true;
+            const NATIVE: bool = true;
+
+            #[inline(always)]
+            fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
+                <$ty as ZeroPod>::check(bytes, limits)
+            }
+
+            #[inline(always)]
+            unsafe fn len(bytes: &[u8]) -> usize {
+                // SAFETY: as the caller promises.
+                unsafe { <$ty as ZeroPod>::len(bytes) }
+            }
+
+            #[inline(always)]
+            unsafe fn read(bytes: &[u8]) -> $ty {
+                // SAFETY: as the caller promises.
+                unsafe { <$ty as ZeroPod>::read(bytes) }
+            }
+
+            #[inline(always)]
+            fn encoded_len(value: &$ty, limits: &[usize]) -> Result<usize, Error> {
+                <$ty as ZeroPod>::encoded_len(value, limits)
+            }
+
+            #[inline(always)]
+            unsafe fn write(value: &$ty, out: &mut [u8]) -> usize {
+                // SAFETY: as the caller promises.
+                unsafe { <$ty as ZeroPod>::write(value, out) }
+            }
+
+            #[inline]
+            fn max_len(limits: &[usize]) -> Option<usize> {
+                <$ty as ZeroPod>::max_len(limits)
+            }
+
+            fn input(&self) -> $ty {
+                self.get()
+            }
+
+            fn own(value: $ty) -> Self {
+                value.into()
+            }
+        }
+
+        // SAFETY: stored as itself, of alignment 1, every value valid.
+        unsafe impl Plain for $stored {
+            type Stored = $stored;
+
+            #[inline(always)]
+            fn from_stored(stored: &$stored) -> $stored {
+                *stored
+            }
+        }
+    )*};
+}
+
+stored!(
+    crate::U16 => u16;
+    crate::U32 => u32;
+    crate::U64 => u64;
+    crate::U128 => u128;
+    crate::I16 => i16;
+    crate::I32 => i32;
+    crate::I64 => i64;
+    crate::I128 => i128;
+);
+
 // SAFETY: `check` accepts one byte, 0 or 1, which is a valid `bool`, and
 // `read` and `write` use only it.
 unsafe impl ZeroPod for bool {
