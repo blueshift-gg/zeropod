@@ -26,7 +26,7 @@ proptest! {
                 1 => view.set_delta(new.delta),
                 2 => view.set_score(new.score),
                 3 => view.set_huge(new.huge),
-                4 => view.set_key(new.key),
+                4 => view.set_key(&new.key),
                 5 => view.set_stats(&new.stats),
                 6 => view.set_status(&new.status),
                 7 => view.set_name(&new.name),

@@ -108,3 +108,41 @@ fn a_max_len_past_the_count_does_not_raise_it() {
     );
     assert_eq!(Loose::max_len(&[]), Some(1 + 255));
 }
+
+#[test]
+fn indexed_items_and_arrays_share_a_public_iterator() {
+    fn sum(iter: zeropod::Iter<'_, u16>) -> u16 {
+        iter.sum()
+    }
+
+    let values = [11u16, 22, 33];
+    let bytes = zeropod::to_vec(&values).unwrap();
+    assert_eq!(sum(zeropod::read::<[u16; 3]>(&bytes).unwrap().iter()), 66);
+
+    let bytes = zeropod::to_vec(&values.to_vec()).unwrap();
+    let items = zeropod::read::<Vec<u16>>(&bytes).unwrap();
+    assert_eq!(sum(items.iter()), 66);
+    assert_eq!((items.get(0), items.get(2)), (Some(11), Some(33)));
+    assert_eq!((items.get(3), items.get(usize::MAX)), (None, None));
+    assert_eq!(zeropod::read::<Vec<u16>>(&[0; 4]).unwrap().get(0), None);
+
+    let bytes = zeropod::to_vec(&SmallVec::<u16>::from(values.to_vec())).unwrap();
+    let items = zeropod::read::<SmallVec<u16>>(&bytes).unwrap();
+    assert_eq!(
+        (items.get(0), items.get(2), items.get(3)),
+        (Some(11), Some(33), None)
+    );
+    let bytes = zeropod::to_vec(&SmallVec::<u16, u16>::from(values.to_vec())).unwrap();
+    let items = zeropod::read::<SmallVec<u16, u16>>(&bytes).unwrap();
+    assert_eq!(
+        (items.get(0), items.get(2), items.get(3)),
+        (Some(11), Some(33), None)
+    );
+
+    let bytes = zeropod::to_vec(&vec![String::new(), "longer".into(), "é".into()]).unwrap();
+    let items = zeropod::read::<Vec<String>>(&bytes).unwrap();
+    assert_eq!(
+        (items.get(0), items.get(2), items.get(3)),
+        (Some(""), Some("é"), None)
+    );
+}

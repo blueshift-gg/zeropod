@@ -1,4 +1,4 @@
-//! Tuples: their items in order.
+//! Tuples: their items in order, forwarding bounds to every item.
 
 use crate::{
     __private::{from, from_unchecked, from_unchecked_mut, sum},
@@ -16,9 +16,9 @@ macro_rules! tuple {
             const ANY_BYTES: bool = true $(&& $item::ANY_BYTES)+;
 
             #[inline]
-            fn check(bytes: &[u8], _: &[usize]) -> Result<usize, Error> {
+            fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
                 let mut at = 0;
-                $(at += $item::check(from(bytes, at), &[])?;)+
+                $(at += $item::check(from(bytes, at), limits)?;)+
                 Ok(at)
             }
 
@@ -44,8 +44,8 @@ macro_rules! tuple {
             }
 
             #[inline]
-            fn encoded_len(value: &Self::In<'_>, _: &[usize]) -> Result<usize, Error> {
-                Ok(0 $(+ $item::encoded_len(&value.$index, &[])?)+)
+            fn encoded_len(value: &Self::In<'_>, limits: &[usize]) -> Result<usize, Error> {
+                Ok(0 $(+ $item::encoded_len(&value.$index, limits)?)+)
             }
 
             #[inline]
@@ -58,8 +58,8 @@ macro_rules! tuple {
 
 
             #[inline]
-            fn max_len(_: &[usize]) -> Option<usize> {
-                Some(0 $(+ $item::max_len(&[])?)+)
+            fn max_len(limits: &[usize]) -> Option<usize> {
+                Some(0 $(+ $item::max_len(limits)?)+)
             }
 
             fn input(&self) -> Self::In<'_> {

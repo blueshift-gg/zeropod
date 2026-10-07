@@ -2,6 +2,8 @@
 //! little-endian `u32` count, then the bytes, items or entries, which a map
 //! writes sorted by key as Borsh does. `SmallStr` and `SmallVec`: the same
 //! after a `u8` or `u16` count. `Box<T>`: its `T`.
+//! Counted collections reject zero-byte element encodings, even when empty,
+//! so a count alone cannot cause unbounded decoding work or allocation.
 
 use alloc::{
     boxed::Box,
@@ -17,6 +19,7 @@ use core::{
 use crate::{
     __private::{from, from_unchecked},
     Error, Plain, ZeroPod,
+    array::{Iter, element_offset},
     count::{Prefix, most, within},
     scalar::item_size,
 };
@@ -154,6 +157,14 @@ string! {
     [P: Prefix] SmallStr<P>, P;
 }
 
+fn check_item_size<T: ZeroPod>() -> Result<(), Error> {
+    if T::SIZE == Some(0) {
+        Err(Error::ZeroSizedItem)
+    } else {
+        Ok(())
+    }
+}
+
 /// Vectors: a `$count`, then that many items.
 macro_rules! vector {
     ($([$($bounds:tt)*] $ty:ty, $count:ty);* $(;)?) => {$(
@@ -171,6 +182,7 @@ macro_rules! vector {
 
             #[inline]
             fn check(bytes: &[u8], limits: &[usize]) -> Result<usize, Error> {
+                check_item_size::<T>()?;
                 let len = <$count>::count(bytes)?;
                 within::<$count>(len, limits)?;
                 match T::SIZE {
@@ -213,6 +225,7 @@ macro_rules! vector {
 
             #[inline]
             fn encoded_len(values: &&[T], limits: &[usize]) -> Result<usize, Error> {
+                check_item_size::<T>()?;
                 within::<$count>(values.len(), limits)?;
                 if let Some(size) = T::SIZE {
                     return Ok(<$count>::WIDTH + values.len() * size);
@@ -287,7 +300,12 @@ impl<T: ZeroPod, P: Prefix> Items<T, P> {
     }
 
     pub fn get(&self, index: usize) -> Option<T::Ref<'_>> {
-        self.iter().nth(index)
+        if index >= self.len() {
+            return None;
+        }
+        let bytes = &self.bytes[P::WIDTH..];
+        // SAFETY: the count was validated and index is within its elements.
+        unsafe { Some(T::read(&bytes[element_offset::<T>(bytes, index)..])) }
     }
 
     pub fn iter(&self) -> Iter<'_, T> {
@@ -332,34 +350,20 @@ impl<T: Plain, P: Prefix> Deref for Items<T, P> {
     }
 }
 
-/// The items of an [`Items`], in order.
-pub struct Iter<'a, T> {
-    item: PhantomData<fn() -> T>,
-    bytes: &'a [u8],
-    at: usize,
-    left: usize,
-}
-
-impl<'a, T: ZeroPod + 'a> Iterator for Iter<'a, T> {
-    type Item = T::Ref<'a>;
-
-    fn next(&mut self) -> Option<T::Ref<'a>> {
-        self.left = self.left.checked_sub(1)?;
-        // SAFETY: an item starts at `at`, as `left` counts.
-        unsafe {
-            let bytes = from_unchecked(self.bytes, self.at);
-            self.at += T::len(bytes);
-            Some(T::read(bytes))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.left, Some(self.left))
-    }
-}
-
-impl<'a, T: ZeroPod + 'a> ExactSizeIterator for Iter<'a, T> {}
-
+/// A box forwards `T`'s borrowed form and size, without adding indirection
+/// to either. Recursive enums like this are therefore unsupported:
+///
+/// ```compile_fail
+/// #[derive(zeropod::ZeroPod)]
+/// enum List {
+///     Nil,
+///     Cons(u8, Box<List>),
+/// }
+/// ```
+///
+/// The generated `ListRef` would contain itself, and computing `SIZE` also
+/// cycles through `Box<List>`. Recursive structs linked through
+/// `Option<Box<Node>>` can still be encoded and decoded.
 // SAFETY: every method is `T`'s.
 unsafe impl<T: ZeroPod> ZeroPod for Box<T> {
     type Ref<'a>
@@ -450,8 +454,9 @@ macro_rules! collection {
 
             #[inline]
             fn encoded_len($entries: &&$ty, limits: &[usize]) -> Result<usize, Error> {
+                check_item_size::<$entry>()?;
                 within::<u32>($entries.len(), limits)?;
-                let entry = |entry| <$entry>::encoded_len(&entry, &[]);
+                let entry = |entry| <$entry>::encoded_len(&entry, limits.get(1..).unwrap_or(&[]));
                 $entries.iter().map($pair).try_fold(4, |at, pair| Ok(at + entry(pair)?))
             }
 

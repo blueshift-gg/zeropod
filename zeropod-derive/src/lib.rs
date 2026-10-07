@@ -8,8 +8,11 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     Attribute, Data, DataEnum, DeriveInput, Error, Expr, Fields, GenericParam, Generics, Ident,
-    Index, Member, Path, Result, Token, Type, Visibility, parse_macro_input, parse_quote,
+    Index, Member, Path, Result, Token, Type, Visibility,
+    ext::IdentExt,
+    parse_macro_input, parse_quote,
     punctuated::Punctuated,
+    visit_mut::{self, VisitMut},
 };
 
 #[proc_macro_derive(ZeroPod, attributes(zeropod, borsh, max_len))]
@@ -57,7 +60,7 @@ fn expand(input: &DeriveInput) -> Result<TokenStream> {
     };
     match &input.data {
         Data::Struct(data) => {
-            let fields = fields(&data.fields)?;
+            let fields = fields(&data.fields, input)?;
             match (&data.fields, fields.as_slice()) {
                 (Fields::Unnamed(_), [field]) if !field.skip => Ok(newtype(input, field, &context)),
                 _ => Ok(structure(input, &fields, &context)),
@@ -122,11 +125,41 @@ struct Field {
     ty: Type,
     vis: Visibility,
     limits: TokenStream,
+    bounded: bool,
     /// `#[borsh(skip)]` or `#[zeropod(skip)]`: not stored, `Default` when read.
     skip: bool,
 }
 
-fn fields(fields: &Fields) -> Result<Vec<Field>> {
+/// Resolve Self in bound expressions before emitting them in views/editors.
+struct BoundOwner(Path);
+
+impl VisitMut for BoundOwner {
+    fn visit_path_mut(&mut self, path: &mut Path) {
+        visit_mut::visit_path_mut(self, path);
+        if path
+            .segments
+            .first()
+            .is_some_and(|segment| segment.ident == "Self")
+        {
+            let mut resolved = self.0.clone();
+            resolved
+                .segments
+                .extend(path.segments.iter().skip(1).cloned());
+            *path = resolved;
+        }
+    }
+}
+
+fn fields(fields: &Fields, input: &DeriveInput) -> Result<Vec<Field>> {
+    let name = &input.ident;
+    let (_, args, _) = input.generics.split_for_impl();
+    let mut owner: Path = parse_quote!(#name #args);
+    if let syn::PathArguments::AngleBracketed(args) =
+        &mut owner.segments.last_mut().unwrap().arguments
+    {
+        args.colon2_token = Some(Default::default());
+    }
+    let mut owner = BoundOwner(owner);
     fields
         .iter()
         .enumerate()
@@ -155,11 +188,15 @@ fn fields(fields: &Fields) -> Result<Vec<Field>> {
                     format_ident!("_{index}"),
                 ),
             };
+            for limit in &mut limits {
+                owner.visit_expr_mut(limit);
+            }
             Ok(Field {
                 member,
                 name,
                 ty: field.ty.clone(),
                 vis: field.vis.clone(),
+                bounded: !limits.is_empty(),
                 limits: quote!(&[#(#limits),*]),
                 skip,
             })
@@ -211,7 +248,12 @@ fn newtype(input: &DeriveInput, field: &Field, context: &Context) -> TokenStream
     } = context;
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let Field { ty, limits, .. } = field;
+    let ty = &field.ty;
+    let limits = if field.bounded {
+        field.limits.clone()
+    } else {
+        quote!(_limits)
+    };
     let transparent = input.attrs.iter().any(|attr| {
         let mut transparent = false;
         if attr.path().is_ident("repr") {
@@ -231,7 +273,7 @@ fn newtype(input: &DeriveInput, field: &Field, context: &Context) -> TokenStream
             const ANY_BYTES: bool = <#ty as #zp>::ANY_BYTES;
             const NATIVE: bool = #transparent && <#ty as #zp>::NATIVE;
 
-            fn check(bytes: &[u8], _: &[usize]) -> ::core::result::Result<usize, #krate::Error> {
+            fn check(bytes: &[u8], _limits: &[usize]) -> ::core::result::Result<usize, #krate::Error> {
                 <#ty as #zp>::check(bytes, #limits)
             }
 
@@ -247,7 +289,7 @@ fn newtype(input: &DeriveInput, field: &Field, context: &Context) -> TokenStream
 
             fn encoded_len(
                 value: &Self::In<'_>,
-                _: &[usize],
+                _limits: &[usize],
             ) -> ::core::result::Result<usize, #krate::Error> {
                 <#ty as #zp>::encoded_len(value, #limits)
             }
@@ -259,7 +301,7 @@ fn newtype(input: &DeriveInput, field: &Field, context: &Context) -> TokenStream
 
 
             #[inline]
-            fn max_len(_: &[usize]) -> ::core::option::Option<usize> {
+            fn max_len(_limits: &[usize]) -> ::core::option::Option<usize> {
                 <#ty as #zp>::max_len(#limits)
             }
 
@@ -284,6 +326,11 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
     let (name, vis) = (&input.ident, &input.vis);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let view = format_ident!("{name}View");
+    let editor = format_ident!("{name}Edit");
+    let mut editor_generics = generics.clone();
+    editor_generics.params.insert(0, parse_quote!('__zeropod));
+    let (editor_impl, editor_args, editor_where) = editor_generics.split_for_impl();
+
     let stored: Vec<&Field> = fields.iter().filter(|field| !field.skip).collect();
     let members: Vec<&Member> = stored.iter().map(|field| &field.member).collect();
     let names: Vec<&Ident> = stored.iter().map(|field| &field.name).collect();
@@ -299,7 +346,10 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             limits,
             ..
         } = field;
-        let setter = format_ident!("set_{}", field_name.to_string().trim_start_matches('_'));
+        let setter = match &field.member {
+            Member::Named(ident) => format_ident!("set_{}", ident),
+            Member::Unnamed(index) => format_ident!("set_{}", index.index),
+        };
         let at = offset(&stored[..index], quote!(0), context);
         let doc_get = format!("`{field_name}`, read in place.");
         let doc_set =
@@ -314,6 +364,8 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             }
 
             #[doc = #doc_set]
+            // Preserve field underscores without warning on names like `set__x`.
+            #[allow(non_snake_case)]
             #vis fn #setter(
                 &mut self,
                 value: <#ty as #zp>::In<'_>,
@@ -328,7 +380,50 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
             }
         }
     });
-    let size_method = (!names.iter().any(|name| *name == "size")).then(|| {
+    let projections: Vec<_> = stored
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let Field {
+                name,
+                ty,
+                vis,
+                limits,
+                ..
+            } = field;
+            let at = offset(&stored[..index], quote!(0), context);
+            quote! {
+                /// An exclusive field projection, retaining the enclosing buffer.
+                #vis fn #name(self) -> #krate::Edit<'__zeropod, #ty> {
+                    let bytes = self.0.as_bytes();
+                    // SAFETY: a validated struct's fields have these offsets and
+                    // bounds; replacing one preserves every enclosing encoding.
+                    let at = unsafe { #at };
+                    // SAFETY: the field at this offset has its declared bounds.
+                    unsafe { self.0.project::<#ty>(at, |with| with(#limits)) }
+                }
+            }
+        })
+        .collect();
+    let has_field = |name: &str| names.iter().any(|field| field.unraw() == name);
+    let edit_method = (!has_field("edit")).then(|| {
+        quote! {
+            /// An exclusive editor retaining the complete enclosing encoding.
+            #vis fn edit(&mut self) -> #krate::Edit<'_, #name #ty_generics> {
+                // SAFETY: this view owns the complete validated encoding.
+                unsafe { #krate::Edit::new(&mut self.1) }
+            }
+        }
+    });
+    let own_method = (!has_field("to_owned")).then(|| {
+        quote! {
+            /// The value, owned.
+            #vis fn to_owned(&self) -> #name #ty_generics {
+                <#name #ty_generics as #zp>::own(self)
+            }
+        }
+    });
+    let size_method = (!has_field("size")).then(|| {
         quote! {
             /// The bytes the encoding takes, without the room after it.
             #vis fn size(&self) -> usize {
@@ -364,6 +459,21 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
         impl #impl_generics ::core::convert::AsRef<#krate::Bytes> for #view #ty_generics #where_clause {
             fn as_ref(&self) -> &#krate::Bytes {
                 &self.1
+            }
+        }
+
+        /// Mutable field projections retaining the complete enclosing encoding.
+        #vis struct #editor #editor_generics (#krate::Edit<'__zeropod, #name #ty_generics>) #editor_where;
+
+        impl #editor_impl #editor #editor_args #editor_where {
+            #(#projections)*
+        }
+
+        impl #impl_generics #krate::EditFields for #name #ty_generics #where_clause {
+            type Fields<'__zeropod> = #editor #editor_args where Self: '__zeropod;
+
+            fn fields<'a>(edit: #krate::Edit<'a, Self>) -> Self::Fields<'a> where Self: 'a {
+                #editor(edit)
             }
         }
 
@@ -470,12 +580,9 @@ fn structure(input: &DeriveInput, fields: &[Field], context: &Context) -> TokenS
 
         impl #impl_generics #view #ty_generics #where_clause {
             #(#accessors)*
+            #edit_method
             #size_method
-
-            /// The value, owned: to change a nested struct, change it and set it back.
-            #vis fn to_owned(&self) -> #name #ty_generics {
-                <#name #ty_generics as #zp>::own(self)
-            }
+            #own_method
         }
     }
 }
@@ -535,7 +642,7 @@ fn enumeration(
         .variants
         .iter()
         .map(|variant| {
-            let fields = fields(&variant.fields)?;
+            let fields = fields(&variant.fields, input)?;
             if let Some(field) = fields.iter().find(|field| field.skip) {
                 return Err(Error::new_spanned(
                     &field.ty,
@@ -550,19 +657,25 @@ fn enumeration(
         })
         .collect::<Result<_>>()?;
 
-    // Binds a variant's fields by name, of `ty`: the enum or its reference.
+    // Keep user field names out of local bindings: they may be `len`, `out`,
+    // `bytes`, or any other name used by the generated implementation.
+    let binding = |index: usize| {
+        format_ident!(
+            "__zeropod_field_{index}",
+            span = proc_macro2::Span::mixed_site()
+        )
+    };
+    // Binds a variant's fields, of `ty`: the enum or its reference.
     let pattern = |ty: &Ident, variant: &Variant| {
         let Variant {
             ident,
             shape,
             fields,
         } = variant;
-        let bound = fields.iter().map(|field| match &field.member {
-            Member::Named(name) => quote!(#name),
-            Member::Unnamed(index) => {
-                let name = &field.name;
-                quote!(#index: #name)
-            }
+        let bound = fields.iter().enumerate().map(|(index, field)| {
+            let member = &field.member;
+            let local = binding(index);
+            quote!(#member: #local)
         });
         match shape {
             Fields::Unit => quote!(#ty::#ident),
@@ -632,9 +745,10 @@ fn enumeration(
     let reads = variants.iter().zip(&tags).map(|(variant, tag)| {
         let fields: Vec<&Field> = variant.fields.iter().collect();
         let bound = fields.iter().enumerate().map(|(index, field)| {
-            let (field_name, ty) = (&field.name, &field.ty);
+            let local = binding(index);
+            let ty = &field.ty;
             let at = offset(&fields[..index], quote!(1), context);
-            quote!(let #field_name = <#ty as #zp>::read(#private::from_unchecked(bytes, #at));)
+            quote!(let #local = <#ty as #zp>::read(#private::from_unchecked(bytes, #at));)
         });
         let value = pattern(&reference, variant);
         quote!(#tag => { #(#bound)* #value })
@@ -643,7 +757,7 @@ fn enumeration(
     let encoded_lens = variants.iter().map(|variant| {
         let tys = variant.fields.iter().map(|field| &field.ty);
         let limits = variant.fields.iter().map(|field| &field.limits);
-        let names = variant.fields.iter().map(|field| &field.name);
+        let names = (0..variant.fields.len()).map(&binding);
         let value = pattern(name, variant);
         quote! {
             #value => {
@@ -656,7 +770,7 @@ fn enumeration(
 
     let writes = variants.iter().zip(&tags).map(|(variant, tag)| {
         let tys = variant.fields.iter().map(|field| &field.ty);
-        let names = variant.fields.iter().map(|field| &field.name);
+        let names = (0..variant.fields.len()).map(&binding);
         let value = pattern(name, variant);
         quote! {
             #value => {
@@ -683,9 +797,10 @@ fn enumeration(
 
     let owns = variants.iter().map(|variant| {
         let from = pattern(&reference, variant);
-        let owned = variant.fields.iter().map(|field| {
-            let (member, name, ty) = (&field.member, &field.name, &field.ty);
-            quote!(#member: <#ty as #zp>::own(#name))
+        let owned = variant.fields.iter().enumerate().map(|(index, field)| {
+            let (member, ty) = (&field.member, &field.ty);
+            let local = binding(index);
+            quote!(#member: <#ty as #zp>::own(#local))
         });
         let ident = variant.ident;
         let to = match variant.shape {

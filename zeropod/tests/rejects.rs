@@ -60,3 +60,40 @@ fn from_slice_takes_all_the_bytes() {
     );
     assert!(zeropod::read::<Sample>(&bytes).is_ok());
 }
+
+#[test]
+fn counted_collections_reject_zero_byte_elements() {
+    #[derive(ZeroPod, Default)]
+    struct Unit;
+    #[derive(ZeroPod, Default)]
+    struct Cache {
+        #[borsh(skip)]
+        _memo: u64,
+    }
+    fn rejected<T: ZeroPod>(value: T, bytes: &[u8]) {
+        assert!(T::check(bytes, &[]).is_err());
+        assert!(zeropod::from_slice::<T>(bytes).is_err());
+        assert!(zeropod::to_vec(&value).is_err());
+        let mut out = [0xa5; 16];
+        assert!(zeropod::write(&value, &mut out).is_err());
+        assert_eq!(out, [0xa5; 16]);
+    }
+    for count in [0u32, 1, u32::MAX] {
+        rejected(Vec::<Unit>::new(), &count.to_le_bytes());
+        rejected(vec![Cache::default()], &count.to_le_bytes());
+        rejected(std::collections::BTreeSet::from([()]), &count.to_le_bytes());
+        rejected(
+            std::collections::BTreeMap::from([((), ())]),
+            &count.to_le_bytes(),
+        );
+        #[cfg(feature = "std")]
+        rejected(std::collections::HashSet::from([()]), &count.to_le_bytes());
+    }
+    rejected(zeropod::SmallVec::<(), u8>::from(vec![()]), &[255]);
+    rejected(
+        zeropod::SmallVec::<Cache, u16>::from(vec![Cache::default()]),
+        &u16::MAX.to_le_bytes(),
+    );
+    // Counts on the wire are the amplification risk; fixed arrays stay valid.
+    assert_eq!(zeropod::from_slice::<[(); 2]>(&[]), Ok([(); 2]));
+}
