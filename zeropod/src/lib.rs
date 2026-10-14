@@ -94,6 +94,7 @@ mod tagged;
 mod tuple;
 #[cfg(feature = "wincode")]
 pub mod wincode;
+mod zc;
 
 #[doc(hidden)]
 pub mod __private;
@@ -106,6 +107,7 @@ pub use error::Error;
 #[cfg(feature = "alloc")]
 pub use heap::{Items, SmallStr, SmallVec};
 pub use scalar::Plain;
+pub use zc::{ZcElem, ZcValidate};
 pub use zerocopy::little_endian::{I16, I32, I64, I128, U16, U32, U64, U128};
 pub use zeropod_derive::ZeroPod;
 

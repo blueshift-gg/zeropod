@@ -48,7 +48,7 @@ let used = view.size();
 
 | Field | Stored as |
 |---|---|
-| `u8`…`u128`, `i8`…`i128` | little-endian |
+| `u8`…`u128`, `i8`…`i128`, and `U16`…`I128` (alignment 1) | little-endian |
 | `bool` | one byte, 0 or 1 |
 | `()`, `PhantomData<T>` | nothing |
 | `[T; N]` for any `T: ZeroPod`, `Address` (feature `solana-address`) | the items in place; arrays have no count |
@@ -179,7 +179,10 @@ out.
   `SchemaWrite` and `SchemaRead` beside `ZeroPod`, and under
   `zeropod::wincode::CONFIG` wincode writes and reads zeropod's bytes,
   zeropod's own types included. `Result` and hash maps differ: wincode swaps
-  the first's tags and does not sort the second.
+  the first's tags and does not sort the second. A `#[repr(C)]` struct of
+  bytes and `U16`…`I128`, all of alignment 1, is zero-copy to wincode too:
+  `#[wincode(assert_zero_copy(zeropod::wincode::Config))]` checks it, and
+  wincode borrows it in place at any address.
 
 `#[zeropod(crate = path)]` points the derive at a crate that re-exports
 zeropod, for frameworks built on it.
